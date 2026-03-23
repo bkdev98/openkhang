@@ -1,5 +1,5 @@
 {
-  "description": "Google Chat autopilot session hooks",
+  "description": "OpenKhang work autopilot hooks",
   "hooks": {
     "SessionStart": [
       {
@@ -9,6 +9,18 @@
             "type": "command",
             "command": "bash $CLAUDE_PLUGIN_ROOT/hooks/scripts/session-start-check.sh",
             "timeout": 15
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Check if the user's message mentions an urgent bug, incident, or ticket (e.g., 'PROJ-123 is broken', 'production is down', 'urgent bug in login'). If it does, append a system message: 'URGENT_TICKET_DETECTED: Extract the ticket ID and suggest using the bug-investigator agent to analyze it, then optionally start a /code-session.' If no urgent ticket is mentioned, return empty systemMessage.",
+            "timeout": 10
           }
         ]
       }
