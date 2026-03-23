@@ -1,0 +1,9 @@
+{
+  "name": "openkhang",
+  "version": "0.1.0",
+  "description": "Work autopilot — Google Chat triage, Jira sprint monitoring, Confluence docs, GitLab code sessions with pipeline watching. Integrates all tools into autonomous workflows.",
+  "author": {
+    "name": "quocs"
+  },
+  "keywords": ["autopilot", "google-chat", "jira", "confluence", "gitlab", "sprint", "pipeline", "automation"]
+}

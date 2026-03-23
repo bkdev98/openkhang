@@ -1,0 +1,17 @@
+{
+  "description": "Google Chat autopilot session hooks",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PLUGIN_ROOT/hooks/scripts/session-start-check.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
