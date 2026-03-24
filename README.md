@@ -4,8 +4,8 @@ Work autopilot plugin for Claude Code — integrates Google Chat, Jira, Confluen
 
 ## Blocks
 
-### Google Chat (`gog chat`)
-- Scan DMs and @mentions, AI categorize messages, auto-reply routine ones
+### Google Chat (Chrome DevTools MCP)
+- Scan DMs and @mentions via Chrome browser, AI categorize messages, auto-reply routine ones
 - Commands: `/chat-scan`, `/chat-reply`, `/chat-spaces`
 - Agent: `chat-categorizer` — classifies messages and drafts replies
 - Continuous mode: `/loop 5m /chat-scan`
@@ -37,15 +37,24 @@ Work autopilot plugin for Claude Code — integrates Google Chat, Jira, Confluen
 
 | Tool | Install | Purpose |
 |------|---------|---------|
-| `gog` | `brew install gog` | Google Chat |
+| Chrome + DevTools MCP | Chrome with DevTools protocol | Google Chat (via browser) |
 | `jira` | `brew install ankitpokhrel/jira-cli/jira` | Jira issues/sprints |
 | `atlassian-cli` | `brew install atlassian-cli` | Confluence + Jira |
 | `glab` | `brew install glab` | GitLab MRs/pipelines |
 
 ## Installation
 
+### From marketplace
+
 ```bash
-claude --plugin-dir /path/to/openkhang-plugin
+/plugin marketplace add bkdev98/openkhang
+/plugin install openkhang@openkhang
+```
+
+### For development
+
+```bash
+claude --plugin-dir /path/to/openkhang
 ```
 
 ## Quick Start

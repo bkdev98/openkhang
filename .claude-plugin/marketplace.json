@@ -1,0 +1,19 @@
+{
+  "name": "openkhang",
+  "owner": {
+    "name": "quocs"
+  },
+  "plugins": [
+    {
+      "name": "openkhang",
+      "source": "./",
+      "description": "Work autopilot — Google Chat triage, Jira sprint monitoring, Confluence docs, GitLab code sessions with pipeline watching.",
+      "version": "0.1.0",
+      "author": {
+        "name": "quocs"
+      },
+      "repository": "https://github.com/bkdev98/openkhang",
+      "keywords": ["autopilot", "google-chat", "jira", "confluence", "gitlab", "sprint", "pipeline", "automation"]
+    }
+  ]
+}
