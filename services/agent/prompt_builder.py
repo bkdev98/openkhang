@@ -182,6 +182,18 @@ class PromptBuilder:
             for rule in never:
                 lines.append(f"- {rule}")
 
+        address = persona.get("address_rules", {})
+        if address:
+            lines.append("\n### Vietnamese form of address (xưng hô) — CRITICAL")
+            lines.append(f"- Default: call others \"{address.get('default_other', 'anh/chị')}\" when you have no history about their seniority")
+            lines.append(f"- Refer to yourself as \"{address.get('default_self', 'mình')}\"")
+            lines.append("- If 'About this person' context below reveals seniority, adjust accordingly:")
+            lines.append("  - Junior colleague → call them \"em\", refer to self as \"anh\"")
+            lines.append("  - Same level → call them by name or \"bạn\", refer to self as \"mình\"")
+            lines.append("  - Senior/manager → call them \"anh/chị\", refer to self as \"em\"")
+            if address.get("never_assume_tu"):
+                lines.append("- NEVER use \"tao/mày\" or overly casual forms")
+
         phrases = persona.get("uncertainty_phrases", {})
         if phrases:
             lines.append("\n### When uncertain, use one of these:")

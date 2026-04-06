@@ -1,6 +1,8 @@
-"""LLM client with Claude API primary and structured response parsing.
+"""LLM client with multi-provider support (Gemini primary, Claude fallback).
 
 Handles API calls, retries, and structured output extraction for the agent pipeline.
+Prefers Gemini 2.5 Flash (free tier / high rate limits) when GEMINI_API_KEY is set.
+Falls back to Claude API when only ANTHROPIC_API_KEY is available.
 """
 
 from __future__ import annotations
@@ -12,12 +14,11 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-import anthropic
-
 logger = logging.getLogger(__name__)
 
-# Default model — Claude Sonnet (fast + capable for chat replies)
-DEFAULT_MODEL = "claude-sonnet-4-20250514"
+# Default models per provider
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514"
 
 # Appended to system prompt to request structured JSON output
 STRUCTURED_OUTPUT_INSTRUCTION = """
@@ -46,40 +47,136 @@ class LLMResponse:
 
 
 class LLMClient:
-    """Claude API client with structured output parsing.
+    """Multi-provider LLM client: Gemini primary, Claude fallback.
 
     Usage:
-        client = LLMClient(api_key="sk-ant-...")
+        # Auto-selects provider based on available keys
+        client = LLMClient(gemini_api_key="...", anthropic_api_key="...")
         response = await client.generate(messages, temperature=0.3)
     """
 
-    def __init__(self, api_key: str) -> None:
-        self._client = anthropic.AsyncAnthropic(api_key=api_key)
+    def __init__(
+        self,
+        gemini_api_key: str = "",
+        anthropic_api_key: str = "",
+        *,
+        # Legacy: accept api_key= for backward compat with agent_relay
+        api_key: str = "",
+    ) -> None:
+        self._gemini_key = gemini_api_key
+        self._anthropic_key = anthropic_api_key or api_key
+        self._provider: str = ""
+
+        if self._gemini_key:
+            from google import genai
+            self._gemini_client = genai.Client(api_key=self._gemini_key)
+            self._provider = "gemini"
+            logger.info("LLMClient: using Gemini (%s)", DEFAULT_GEMINI_MODEL)
+        elif self._anthropic_key:
+            import anthropic
+            self._anthropic_client = anthropic.AsyncAnthropic(api_key=self._anthropic_key)
+            self._provider = "claude"
+            logger.info("LLMClient: using Claude (%s)", DEFAULT_CLAUDE_MODEL)
+        else:
+            raise ValueError("No LLM API key provided (need GEMINI_API_KEY or ANTHROPIC_API_KEY)")
 
     async def generate(
         self,
         messages: list[dict],
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
         temperature: float = 0.3,
         max_tokens: int = 1024,
         require_structured: bool = True,
     ) -> LLMResponse:
-        """Call Claude API and return a parsed LLMResponse.
+        """Call LLM and return a parsed LLMResponse.
 
         Args:
             messages: List of {role, content} dicts. System prompt entry must
                       have role='system'; it is extracted and sent separately.
-            model: Claude model ID.
+            model: Override model ID. If None, uses provider default.
             temperature: 0.3 for outward (consistent style), 0.5 for inward.
             max_tokens: Maximum tokens in response.
             require_structured: If True, appends JSON output instruction to system prompt.
-
-        Returns:
-            LLMResponse with text, confidence, evidence, model, tokens, latency.
-
-        Raises:
-            RuntimeError: If API call fails.
         """
+        if self._provider == "gemini":
+            return await self._generate_gemini(messages, model, temperature, max_tokens, require_structured)
+        return await self._generate_claude(messages, model, temperature, max_tokens, require_structured)
+
+    # ------------------------------------------------------------------
+    # Gemini provider
+    # ------------------------------------------------------------------
+
+    async def _generate_gemini(
+        self,
+        messages: list[dict],
+        model: str | None,
+        temperature: float,
+        max_tokens: int,
+        require_structured: bool,
+    ) -> LLMResponse:
+        """Generate via Google Gemini API."""
+        from google.genai import types
+
+        model_id = model or DEFAULT_GEMINI_MODEL
+        system_prompt: Optional[str] = None
+        convo_contents: list[types.Content] = []
+
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_prompt = msg["content"]
+            else:
+                role = "model" if msg["role"] == "assistant" else "user"
+                convo_contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
+
+        if require_structured:
+            system_prompt = (system_prompt or "") + "\n\n" + STRUCTURED_OUTPUT_INSTRUCTION
+
+        t0 = time.monotonic()
+        try:
+            config = types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=temperature,
+                max_output_tokens=max_tokens,
+            )
+            resp = await self._gemini_client.aio.models.generate_content(
+                model=model_id,
+                contents=convo_contents,
+                config=config,
+            )
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            raw_text = resp.text or ""
+            # Gemini usage metadata
+            tokens_used = 0
+            if resp.usage_metadata:
+                tokens_used = (resp.usage_metadata.prompt_token_count or 0) + (resp.usage_metadata.candidates_token_count or 0)
+
+        except Exception as exc:
+            raise RuntimeError(f"Gemini API error: {exc}") from exc
+
+        return self._parse_response(
+            raw_text=raw_text,
+            model_used=model_id,
+            tokens_used=tokens_used,
+            latency_ms=latency_ms,
+            structured=require_structured,
+        )
+
+    # ------------------------------------------------------------------
+    # Claude provider (fallback)
+    # ------------------------------------------------------------------
+
+    async def _generate_claude(
+        self,
+        messages: list[dict],
+        model: str | None,
+        temperature: float,
+        max_tokens: int,
+        require_structured: bool,
+    ) -> LLMResponse:
+        """Generate via Anthropic Claude API."""
+        import anthropic
+
+        model_id = model or DEFAULT_CLAUDE_MODEL
         system_prompt: Optional[str] = None
         convo_messages: list[dict] = []
 
@@ -95,7 +192,7 @@ class LLMClient:
         t0 = time.monotonic()
         try:
             kwargs: dict = {
-                "model": model,
+                "model": model_id,
                 "max_tokens": max_tokens,
                 "temperature": temperature,
                 "messages": convo_messages,
@@ -103,8 +200,7 @@ class LLMClient:
             if system_prompt:
                 kwargs["system"] = system_prompt
 
-            resp = await self._client.messages.create(**kwargs)
-
+            resp = await self._anthropic_client.messages.create(**kwargs)
             latency_ms = int((time.monotonic() - t0) * 1000)
             raw_text = resp.content[0].text if resp.content else ""
             tokens_used = resp.usage.input_tokens + resp.usage.output_tokens
@@ -116,11 +212,15 @@ class LLMClient:
 
         return self._parse_response(
             raw_text=raw_text,
-            model_used=model,
+            model_used=model_id,
             tokens_used=tokens_used,
             latency_ms=latency_ms,
             structured=require_structured,
         )
+
+    # ------------------------------------------------------------------
+    # Response parsing (shared)
+    # ------------------------------------------------------------------
 
     def _parse_response(
         self,
@@ -165,8 +265,6 @@ class LLMClient:
             )
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning("Failed to parse structured LLM response: %s", exc)
-            # Fallback: treat entire output as reply text, assign low confidence
-            # so it always lands in draft queue rather than auto-sending.
             return LLMResponse(
                 text=raw_text.strip(),
                 confidence=0.3,

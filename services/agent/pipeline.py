@@ -88,7 +88,10 @@ class AgentPipeline:
         """
         config = MemoryConfig.from_env()
         memory_client = MemoryClient(config)
-        llm_client = LLMClient(api_key=config.anthropic_api_key)
+        llm_client = LLMClient(
+            gemini_api_key=config.gemini_api_key,
+            anthropic_api_key=config.anthropic_api_key,
+        )
         draft_queue = DraftQueue(database_url=config.database_url)
         matrix_sender = MatrixSender(
             homeserver=os.environ.get("MATRIX_HOMESERVER", "http://localhost:8008"),
@@ -144,6 +147,19 @@ class AgentPipeline:
             has_deadline_risk = self._classifier.has_deadline_risk(body)
 
             logger.debug("Event classified: mode=%s intent=%s deadline_risk=%s", mode, intent, has_deadline_risk)
+
+            # Step 1b: enforce group chat behavioral rules
+            # Skip social/humor/greeting/fyi in group chats UNLESS mentioned
+            is_group = self._is_group_chat(event)
+            is_mentioned = self._is_mentioned(body)
+            if mode == "outward" and is_group and not is_mentioned and intent in ("social", "humor", "greeting", "fyi"):
+                logger.info("Skipping group chat %s intent=%s (behavioral rule: ignore_in_group)",
+                            event.get("room_name", ""), intent)
+                return AgentResult(
+                    mode=mode, intent=intent, reply_text="",
+                    confidence=0.0, action="skipped",
+                    latency_ms=int((time.monotonic() - t0) * 1000),
+                )
 
             # Step 2: RAG — search relevant memories
             memories = await self._memory.search(
@@ -297,6 +313,36 @@ class AgentPipeline:
     # Room history check
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _is_mentioned(body: str) -> bool:
+        """Check if message @mentions Khanh (by name or @all)."""
+        import re
+        text = body.lower()
+        # Common mention patterns: @khanh, @bui, @all, full name variants
+        mention_patterns = [
+            r"@khanh", r"@bui", r"@all",
+            r"\bkhanh\b", r"\bbui quoc khanh\b",
+        ]
+        return any(re.search(p, text) for p in mention_patterns)
+
+    @staticmethod
+    def _is_group_chat(event: dict) -> bool:
+        """Detect if event is from a group chat (not a 1:1 DM).
+
+        Heuristics: room_name containing spaces/hyphens or multiple members
+        suggests a group. DMs in Matrix typically have no display name or
+        use the other person's name.
+        """
+        room_name = event.get("room_name", "")
+        room_id = event.get("room_id", "")
+        # Matrix group rooms typically have descriptive names
+        # DMs have empty room_name or just the other user's name
+        if room_name and (" " in room_name or "-" in room_name or "team" in room_name.lower()):
+            return True
+        # Matrix convention: DM room IDs are shorter; groups have longer IDs
+        # But safest: if room_name is set and looks like a channel name, it's a group
+        return bool(room_name)
+
     async def _check_room_history(self, room_id: str) -> bool:
         """Check if we have any prior participation in this room.
 
@@ -344,7 +390,9 @@ class AgentPipeline:
         # Outward mode: check confidence threshold for this room
         room_id = event.get("room_id", "")
 
-        if self._scorer.should_auto_send(confidence, room_id):
+        # Check global autoreply toggle
+        from services.dashboard.agent_relay import is_autoreply_enabled
+        if self._scorer.should_auto_send(confidence, room_id) and is_autoreply_enabled():
             # Auto-send via Matrix
             try:
                 matrix_event_id = await self._sender.send(

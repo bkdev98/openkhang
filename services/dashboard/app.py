@@ -24,6 +24,18 @@ from .agent_relay import run_agent_relay
 
 logger = logging.getLogger(__name__)
 
+# Suppress noisy Mem0 "Invalid JSON response" warnings from Gemini extraction
+class _Mem0JsonFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "Invalid JSON response" not in record.getMessage()
+
+for _name in ("mem0", "mem0.memory.main", "mem0.client.main"):
+    logging.getLogger(_name).addFilter(_Mem0JsonFilter())
+
+# Suppress google-genai deprecation warning
+import warnings
+warnings.filterwarnings("ignore", message=".*Inheritance class AiohttpClientSession.*")
+
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = TEMPLATES_DIR / "static"
 
@@ -38,6 +50,8 @@ async def lifespan(app: FastAPI):
     _svc = DashboardServices()
     relay_task = None
     agent_task = None
+    telegram_task = None
+    telegram_poll_task = None
     scheduler = None
     try:
         await _svc.connect()
@@ -66,6 +80,29 @@ async def lifespan(app: FastAPI):
                 logger.info("Ingestion scheduler started (Jira/GitLab/Confluence)")
             except Exception as exc:
                 logger.warning("Ingestion scheduler failed to start: %s", exc)
+            # Telegram bot (opt-in via TELEGRAM_BOT_TOKEN)
+            try:
+                from services.telegram.bot import init_bot, set_pool, bot as tg_bot, dp as tg_dp
+                result = init_bot()
+                if result:
+                    set_pool(_svc._pool)
+                    from services.telegram.bot import bot as tg_bot, dp as tg_dp
+                    from services.telegram.notifier import run_notifier
+                    telegram_task = asyncio.create_task(run_notifier(_svc._pool))
+                    # Start polling for commands (no webhook needed for local dev)
+                    webhook_url = os.getenv("TELEGRAM_WEBHOOK_URL", "")
+                    if webhook_url:
+                        await tg_bot.set_webhook(webhook_url + "/telegram/webhook")
+                        logger.info("Telegram webhook set: %s", webhook_url)
+                    else:
+                        # Polling mode: process incoming commands via long-polling
+                        async def _poll_telegram():
+                            await tg_dp.start_polling(tg_bot, handle_signals=False)
+                        telegram_poll_task = asyncio.create_task(_poll_telegram())
+                        logger.info("Telegram bot polling started")
+                    logger.info("Telegram bot + notifier started")
+            except Exception as exc:
+                logger.warning("Telegram bot failed to start: %s", exc)
     except Exception as exc:
         logger.warning("Dashboard services connect failed (running degraded): %s", exc)
     yield
@@ -73,6 +110,10 @@ async def lifespan(app: FastAPI):
         relay_task.cancel()
     if agent_task:
         agent_task.cancel()
+    if telegram_task:
+        telegram_task.cancel()
+    if telegram_poll_task:
+        telegram_poll_task.cancel()
     if scheduler:
         await scheduler.stop()
     if _svc:
@@ -198,6 +239,31 @@ async def edit_draft(request: Request, draft_id: str, edited_text: str = Form(..
 
 
 # ------------------------------------------------------------------
+# Auto-reply toggle
+# ------------------------------------------------------------------
+
+@app.get("/api/autoreply")
+async def get_autoreply():
+    """Return current auto-reply status."""
+    from .agent_relay import is_autoreply_enabled
+    return {"enabled": is_autoreply_enabled()}
+
+
+@app.post("/api/autoreply/toggle", response_class=HTMLResponse)
+async def toggle_autoreply():
+    """Toggle auto-reply mode and return updated status badge."""
+    from .agent_relay import is_autoreply_enabled, set_autoreply
+    new_state = not is_autoreply_enabled()
+    set_autoreply(new_state)
+    label = "ON" if new_state else "OFF"
+    color = "green" if new_state else "red"
+    return HTMLResponse(
+        f'<span class="px-2 py-1 rounded text-xs font-bold bg-{color}-600 text-white">'
+        f'Auto-reply: {label}</span>'
+    )
+
+
+# ------------------------------------------------------------------
 # Health panel: HTMX partial
 # ------------------------------------------------------------------
 
@@ -225,6 +291,22 @@ async def stats_bar(request: Request):
         logger.error("stats_bar error: %s", exc)
         stats = {}
     return templates.TemplateResponse(request, "partials/stats_bar.html", {"stats": stats})
+
+
+# ------------------------------------------------------------------
+# Telegram webhook
+# ------------------------------------------------------------------
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Receive Telegram updates via webhook."""
+    from services.telegram.bot import bot as tg_bot, dp as tg_dp
+    if not tg_bot or not tg_dp:
+        return {"ok": False, "error": "bot not initialized"}
+    from aiogram.types import Update
+    update = Update.model_validate(await request.json(), context={"bot": tg_bot})
+    await tg_dp.feed_update(tg_bot, update)
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------

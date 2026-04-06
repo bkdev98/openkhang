@@ -51,6 +51,7 @@ class ConfluenceIngestor(BaseIngestor):
         self._username = os.getenv("CONFLUENCE_USERNAME", "")
         self._api_token = os.getenv("CONFLUENCE_API_TOKEN", "")
         self._space_key = space_key or os.getenv("CONFLUENCE_SPACE_KEY", "")
+        self._api_path = os.getenv("CONFLUENCE_API_PATH", "/wiki/api/v2")
         self._limit = limit
 
     # ------------------------------------------------------------------
@@ -93,16 +94,31 @@ class ConfluenceIngestor(BaseIngestor):
             return None
 
     def _fetch_pages_via_api(self, since: datetime | None = None) -> list[dict[str, Any]]:
-        """Fetch recent pages from Confluence REST API v2."""
-        params: dict[str, Any] = {
-            "limit": self._limit,
-            "sort": "-last-modified",
-            "body-format": "storage",
-        }
-        if self._space_key:
-            params["space-key"] = self._space_key
+        """Fetch recent pages from Confluence REST API (v1 or v2, auto-detected)."""
+        is_v1 = "/rest/api" in self._api_path and "v2" not in self._api_path
 
-        data = self._api_get("/wiki/api/v2/pages", params)
+        if is_v1:
+            # Confluence Server/DC uses REST API v1: /rest/api/content
+            params: dict[str, Any] = {
+                "limit": self._limit,
+                "orderby": "lastmodified desc",
+                "expand": "body.storage,version",
+            }
+            if self._space_key:
+                params["spaceKey"] = self._space_key
+            path = f"{self._api_path}/content"
+        else:
+            # Confluence Cloud uses REST API v2: /wiki/api/v2/pages
+            params = {
+                "limit": self._limit,
+                "sort": "-last-modified",
+                "body-format": "storage",
+            }
+            if self._space_key:
+                params["space-key"] = self._space_key
+            path = f"{self._api_path}/pages"
+
+        data = self._api_get(path, params)
         if not data:
             return []
 
@@ -110,14 +126,14 @@ class ConfluenceIngestor(BaseIngestor):
 
         # Filter by since timestamp if provided
         if since:
+            since_iso = since.isoformat()
             filtered = []
             for page in results:
                 version = page.get("version", {})
                 updated = version.get("createdAt", "")
-                if updated and updated >= since.isoformat():
+                if not updated or updated >= since_iso:
                     filtered.append(page)
-                else:
-                    filtered.append(page)  # Include all when filtering is uncertain
+                # Skip pages not updated since last sync
             return filtered
 
         return results
@@ -215,7 +231,7 @@ class ConfluenceIngestor(BaseIngestor):
             else str(space_raw)
         )
 
-        # Try to get body content from the page dict first
+        # Extract body from inline page data (already fetched with body-format=storage)
         body_raw = page.get("body", {})
         content = ""
         if isinstance(body_raw, dict):
@@ -223,7 +239,7 @@ class ConfluenceIngestor(BaseIngestor):
             value = storage.get("value", "") if isinstance(storage, dict) else ""
             content = _strip_html_tags(value)
 
-        # If no inline body, fetch separately
+        # Only fetch separately if inline body was empty (avoids double API call)
         if not content.strip():
             content = self._get_page_body(page_id)
 
@@ -321,9 +337,20 @@ class ConfluenceIngestor(BaseIngestor):
 
 
 def _strip_html_tags(html: str) -> str:
-    """Remove HTML tags and decode common entities for plain text."""
+    """Remove HTML tags and decode common entities for plain text.
+
+    Preserves content inside <code>/<pre> blocks by converting them to
+    markdown fenced code blocks before stripping other tags.
+    """
     import re
-    text = re.sub(r"<[^>]+>", " ", html)
+    # Preserve code blocks as markdown fenced code
+    text = re.sub(
+        r"<(pre|code)[^>]*>(.*?)</\1>",
+        lambda m: f"\n```\n{m.group(2)}\n```\n",
+        html,
+        flags=re.DOTALL,
+    )
+    text = re.sub(r"<[^>]+>", " ", text)
     text = text.replace("&nbsp;", " ").replace("&amp;", "&")
     text = text.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"')
     text = re.sub(r"\s{2,}", " ", text)

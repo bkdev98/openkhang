@@ -66,16 +66,13 @@ class JiraIngestor(BaseIngestor):
         )
 
     def _run_jira_cli(self, args: list[str]) -> list[dict[str, Any]]:
-        """Run jira CLI command and parse JSON output.
+        """Run jira CLI command and parse output (JSON or tab-separated).
 
         Args:
             args: CLI arguments after `jira`.
 
         Returns:
-            Parsed JSON list, or empty list on error.
-
-        Raises:
-            FileNotFoundError: if `jira` CLI is not installed.
+            Parsed list of dicts, or empty list on error.
         """
         try:
             result = subprocess.run(
@@ -95,12 +92,26 @@ class JiraIngestor(BaseIngestor):
             print(f"[jira] CLI error (rc={result.returncode}): {result.stderr[:300]}")
             return []
 
-        try:
-            data = json.loads(result.stdout)
-            return data if isinstance(data, list) else [data]
-        except json.JSONDecodeError as exc:
-            print(f"[jira] failed to parse CLI output: {exc}")
+        stdout = result.stdout.strip()
+        if not stdout:
             return []
+
+        # Try JSON first
+        try:
+            data = json.loads(stdout)
+            return data if isinstance(data, list) else [data]
+        except json.JSONDecodeError:
+            pass
+
+        # Fallback: parse tab-separated plain text (KEY\tSUMMARY\tSTATUS\tASSIGNEE\tPRIORITY)
+        fields = ["key", "summary", "status", "assignee", "priority"]
+        items = []
+        for line in stdout.splitlines():
+            parts = [p.strip() for p in line.split("\t")]
+            if len(parts) >= 2:
+                row = {fields[i]: parts[i] if i < len(parts) else "" for i in range(len(fields))}
+                items.append(row)
+        return items
 
     def _fetch_issue_detail(self, key: str) -> dict[str, Any]:
         """Fetch full issue detail including description and comments."""
@@ -132,11 +143,14 @@ class JiraIngestor(BaseIngestor):
         ])
 
         if not issues:
-            # Try JSON output format
+            # Fallback: broader query without sprint filter
+            fallback_jql = f'project = {self._project} AND updated >= "-7d"'
             issues = self._run_jira_cli([
                 "issue", "list",
-                "--jql", jql,
-                "--output-format", "json",
+                "--jql", fallback_jql,
+                "--plain",
+                "--no-headers",
+                "--columns", "KEY,SUMMARY,STATUS,ASSIGNEE,PRIORITY",
             ])
 
         docs: list[Document] = []

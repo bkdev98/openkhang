@@ -18,7 +18,7 @@ projects:
     description: "Mini App Transaction History"
     include_paths: []  # index everything
     extensions: [".kt", ".ts", ".tsx", ".md"]
-    exclude_patterns: ["node_modules", "build", "dist", ".gradle"]
+    exclude_patterns: ["node_modules", "build", "dist", ".gradle", ".opencode", ".claude", "plans", ".husky", ".git"]
 
   expense:
     path: ~/Projects/expense
@@ -26,7 +26,7 @@ projects:
     description: "Mini App Expense Management"
     include_paths: []  # index everything
     extensions: [".kt", ".ts", ".tsx", ".md"]
-    exclude_patterns: ["node_modules", "build", "dist", ".gradle"]
+    exclude_patterns: ["node_modules", "build", "dist", ".gradle", ".opencode", ".claude", "plans", ".husky", ".git"]
 
     # High-priority docs — these get tagged as business-logic/api-spec
     priority_docs:

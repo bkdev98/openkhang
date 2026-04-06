@@ -43,8 +43,17 @@ class GitLabIngestor(BaseIngestor):
         project: str | None = None,
     ) -> None:
         super().__init__(memory_client)
-        # Allow overriding project path; glab uses current repo by default
-        self._project = project or os.getenv("GITLAB_PROJECT", "")
+        # Support multiple projects via GITLAB_PROJECTS (comma-separated)
+        projects_env = os.getenv("GITLAB_PROJECTS", "")
+        self._projects: list[str] = (
+            [project] if project
+            else [p.strip() for p in projects_env.split(",") if p.strip()]
+        )
+        # Legacy fallback
+        if not self._projects:
+            single = os.getenv("GITLAB_PROJECT", "")
+            if single:
+                self._projects = [single]
 
     def _run_glab(self, args: list[str]) -> Any:
         """Run glab CLI and return parsed JSON output.
@@ -84,49 +93,49 @@ class GitLabIngestor(BaseIngestor):
             # glab sometimes returns non-JSON for empty results
             return []
 
-    def _project_args(self) -> list[str]:
-        """Return --repo flag if GITLAB_PROJECT is set."""
-        if self._project:
-            return ["--repo", self._project]
-        return []
-
     async def fetch_new(self, since: datetime | None = None) -> list[Document]:
-        """Fetch open MRs and recently merged MRs.
+        """Fetch open + recently merged MRs from all configured GitLab projects.
 
         Args:
-            since: Unused for GitLab (glab has limited filtering);
-                   open MRs + last 20 merged are always fetched.
+            since: Unused (glab has limited date filtering).
 
         Returns:
             One Document per MR.
         """
         docs: list[Document] = []
 
-        # Fetch open MRs
-        open_mrs = self._run_glab(
-            ["mr", "list", "--output", "json"] + self._project_args()
-        )
-        if open_mrs and isinstance(open_mrs, list):
-            for mr in open_mrs:
-                doc = self._mr_to_document(mr)
-                if doc:
-                    docs.append(doc)
+        if not self._projects:
+            print("[gitlab] no projects configured (set GITLAB_PROJECTS in .env)")
+            return docs
 
-        # Fetch recently merged MRs (last 20)
-        merged_mrs = self._run_glab(
-            ["mr", "list", "--state", "merged", "--per-page", "20",
-             "--output", "json"] + self._project_args()
-        )
-        if merged_mrs and isinstance(merged_mrs, list):
-            seen_ids = {d.doc_id for d in docs}
-            for mr in merged_mrs:
-                iid = str(mr.get("iid", mr.get("number", "")))
-                if iid not in seen_ids:
+        for project in self._projects:
+            repo_args = ["--repo", project]
+            print(f"[gitlab] polling {project}")
+
+            # Fetch open MRs
+            open_mrs = self._run_glab(["mr", "list", "-F", "json"] + repo_args)
+            if open_mrs and isinstance(open_mrs, list):
+                for mr in open_mrs:
+                    mr["_gitlab_project"] = project
                     doc = self._mr_to_document(mr)
                     if doc:
                         docs.append(doc)
 
-        print(f"[gitlab] fetched {len(docs)} MRs")
+            # Fetch recently merged MRs (last 20)
+            merged_mrs = self._run_glab(
+                ["mr", "list", "-M", "--per-page", "20", "-F", "json"] + repo_args
+            )
+            if merged_mrs and isinstance(merged_mrs, list):
+                seen_ids = {d.doc_id for d in docs}
+                for mr in merged_mrs:
+                    iid = str(mr.get("iid", mr.get("number", "")))
+                    if iid not in seen_ids:
+                        mr["_gitlab_project"] = project
+                        doc = self._mr_to_document(mr)
+                        if doc:
+                            docs.append(doc)
+
+        print(f"[gitlab] fetched {len(docs)} MRs total across {len(self._projects)} projects")
         return docs
 
     def _mr_to_document(self, mr: dict[str, Any]) -> Document | None:
