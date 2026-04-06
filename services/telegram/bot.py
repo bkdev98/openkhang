@@ -332,6 +332,14 @@ async def inward_chat(message: Message) -> None:
         from services.dashboard.twin_chat import ask_twin
         result = await ask_twin(message.text)
         reply = result.get("reply_text") or result.get("error") or "No response."
+
+        # If an action was executed (e.g. sent a message), append result
+        action = result.get("action_executed")
+        if action and action.get("success"):
+            reply += f"\n\n<b>Sent to {_esc(action['sent_to'])}:</b>\n{_esc(action.get('message', '')[:200])}"
+        elif action and not action.get("success"):
+            reply += f"\n\n<b>Action failed:</b> {_esc(action.get('error', ''))}"
+
         await thinking_msg.edit_text(reply)
     except Exception as exc:
         logger.error("telegram: inward chat error: %s", exc)
