@@ -1,0 +1,53 @@
+# openkhang digital twin services
+# NOTE: Bridge stack lives at ~/.mautrix-googlechat/docker-compose.yml
+# These services communicate via openkhang-net bridge network.
+
+networks:
+  openkhang-net:
+    driver: bridge
+
+volumes:
+  openkhang-pgdata:
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: openkhang-postgres
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: openkhang
+      POSTGRES_PASSWORD: openkhang
+      POSTGRES_DB: openkhang
+    volumes:
+      - openkhang-pgdata:/var/lib/postgresql/data
+      - ./services/memory/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    networks:
+      - openkhang-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openkhang -d openkhang"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: openkhang-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    # No persistence — used as pub/sub event bus only
+    command: redis-server --save ""
+    networks:
+      - openkhang-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # NOTE: Ollama runs natively on macOS (Metal acceleration on M2).
+  # Start with: ollama serve
+  # The embedding model is pulled with: ollama pull bge-m3
+  # Services connect to http://localhost:11434 (host network)
