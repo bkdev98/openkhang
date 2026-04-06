@@ -41,12 +41,10 @@ nano .env
 
 **Required in `.env`:**
 ```bash
-# Agent replies — Meridian proxy (Claude Max subscription, $0 marginal cost)
+# Meridian proxy (Claude Max subscription, $0 marginal cost)
+# Powers TWO things: agent replies AND memory extraction (claude-haiku-4-5-20251001)
 # Auto-starts with dashboard. Install: npm install -g @rynfar/meridian
 MERIDIAN_URL=http://127.0.0.1:3456
-
-# Memory extraction — Gemini free tier (used by Mem0 only)
-GEMINI_API_KEY=AIza...
 
 # Fallback — Claude API (paid per-token, used only if MERIDIAN_URL not set)
 ANTHROPIC_API_KEY=sk-ant-...

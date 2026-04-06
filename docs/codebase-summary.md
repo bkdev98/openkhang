@@ -490,7 +490,7 @@ Ingestion     Agent Pipeline  Workflow Engine  Dashboard    Memory Service
 
 | File | Purpose |
 |------|---------|
-| `.env` | Secrets (MERIDIAN_URL, GEMINI_API_KEY, DB creds) |
+| `.env` | Secrets (MERIDIAN_URL, ANTHROPIC_API_KEY fallback, DB creds) |
 | `config/persona.yaml` | Identity, style, never_do rules |
 | `config/confidence_thresholds.yaml` | Per-room auto-send thresholds |
 | `config/projects.yaml` | Code projects to index (3 repos) |

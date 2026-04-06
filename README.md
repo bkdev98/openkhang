@@ -36,11 +36,11 @@ Google Chat ←→ mautrix bridge ←→ Synapse ←→ matrix-listener
 
 ### LLM Providers
 
-Agent replies use **Meridian** (Claude Max subscription proxy, $0 marginal cost). Memory extraction uses Gemini 2.5 Flash (free tier). Meridian auto-starts with the dashboard — no separate terminal needed.
+**Meridian** (Claude Max subscription proxy, $0 marginal cost) powers two things: agent replies AND memory extraction (claude-haiku-4-5-20251001 via OpenAI-compatible endpoint). Meridian auto-starts with the dashboard — no separate terminal needed.
 
 ### Memory System
 
-Three-layer memory powered by Mem0 + Gemini 2.5 Flash:
+Three-layer memory powered by Mem0 + Haiku 4.5 (via Meridian):
 - **Semantic**: Vector search (pgvector + bge-m3 via OpenRouter API) for knowledge retrieval
 - **Episodic**: Append-only Postgres event log (chat, code, Jira, agent actions)
 - **Working**: In-memory session context with 30-min TTL
@@ -49,7 +49,7 @@ Three-layer memory powered by Mem0 + Gemini 2.5 Flash:
 
 ```bash
 # 1. Clone and configure
-cp .env.example .env    # Set MERIDIAN_URL, GEMINI_API_KEY + work tool creds
+cp .env.example .env    # Set MERIDIAN_URL + work tool creds
 
 # 2. Run onboarding (checks prereqs, starts infra, pulls bge-m3)
 bash scripts/onboard.sh
@@ -97,12 +97,10 @@ bash scripts/run-dashboard.sh
 ### LLM (`env`)
 
 ```bash
-# Agent replies — Meridian proxy (uses Claude Max subscription, $0 marginal cost)
+# Meridian proxy (Claude Max subscription, $0 marginal cost)
+# Powers TWO things: agent replies AND memory extraction (claude-haiku-4-5-20251001)
 # Auto-starts with dashboard if set. Falls back to ANTHROPIC_API_KEY if not set.
 MERIDIAN_URL=http://127.0.0.1:3456
-
-# Memory extraction — Gemini free tier (used by Mem0 only)
-GEMINI_API_KEY=AIza...
 
 # Fallback only — Claude API (paid per-token, used if MERIDIAN_URL is not set)
 ANTHROPIC_API_KEY=sk-ant-...

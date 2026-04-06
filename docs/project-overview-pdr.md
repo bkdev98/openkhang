@@ -160,7 +160,7 @@ Example: `chat-to-jira.yaml` routes certain chat patterns to Jira ticket creatio
 | Component | Tech | Details |
 |-----------|------|---------|
 | Memory | pgvector + Mem0 + OpenRouter API | Postgres 5433, BAAI/bge-m3 embeddings, episodic event log |
-| LLM | Claude API | claude-opus for outward (quality), claude-sonnet for memory extraction |
+| LLM | Meridian (Claude Max proxy) + Claude API fallback | claude-haiku-4-5 for memory extraction; agent replies via Meridian ($0 marginal cost) |
 | Bridge | Synapse + mautrix-googlechat | Matrix protocol; docker compose in ~/.mautrix-googlechat/ |
 | Dashboard | FastAPI + HTMX | Python async; TailwindCSS styling; SSE for real-time updates |
 | Event Bus | Redis | Pub/sub between services; 6379 default |

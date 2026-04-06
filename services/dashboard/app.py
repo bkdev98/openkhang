@@ -24,7 +24,7 @@ from .agent_relay import run_agent_relay
 
 logger = logging.getLogger(__name__)
 
-# Suppress noisy Mem0 "Invalid JSON response" warnings from Gemini extraction
+# Suppress noisy Mem0 "Invalid JSON response" warnings from LLM extraction
 class _Mem0JsonFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         return "Invalid JSON response" not in record.getMessage()

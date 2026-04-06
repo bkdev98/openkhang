@@ -64,7 +64,7 @@ if [[ ! -f .env ]]; then
         cp .env.example .env
         warn ".env created from .env.example — edit it with your API keys"
         info "Required: EMBEDDING_API_KEY (get at https://openrouter.ai/keys)"
-        info "Required: GEMINI_API_KEY (for Mem0 memory extraction)"
+        info "Required: MERIDIAN_URL (for Mem0 memory extraction via Haiku)"
         read -rp "  Press Enter to continue after editing .env (or Ctrl+C to abort)... "
     else
         fail ".env.example not found"
@@ -84,10 +84,10 @@ else
     exit 1
 fi
 
-if [[ -n "${GEMINI_API_KEY:-}" ]]; then
-    ok "GEMINI_API_KEY is set"
+if curl -sf "${MERIDIAN_URL:-http://127.0.0.1:3456}/v1/models" &>/dev/null; then
+    ok "Meridian is running (memory extraction via Haiku)"
 else
-    warn "GEMINI_API_KEY not set — Mem0 memory extraction will fail"
+    warn "Meridian not running — memory extraction will fail. Start with: meridian"
 fi
 
 # ── 3. Python venv ───────────────────────────────────────────────

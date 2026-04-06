@@ -139,7 +139,7 @@ Services running:
   Embeddings → $EMBEDDING_API_URL  (model: $EMBEDDING_MODEL)
 
 Next steps:
-  1. Add GEMINI_API_KEY to .env (required for Mem0 memory extraction)
+  1. Start Meridian: meridian (required for Mem0 memory extraction via Haiku)
   2. Ingest existing chat history:
        python3 services/memory/ingest-chat-history.py
   3. Run a quick smoke test:
