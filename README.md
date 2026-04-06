@@ -4,8 +4,8 @@ Work autopilot plugin for Claude Code — integrates Google Chat, Jira, Confluen
 
 ## Blocks
 
-### Google Chat (Chrome DevTools MCP)
-- Scan DMs and @mentions via Chrome browser, AI categorize messages, auto-reply routine ones
+### Google Chat (mautrix bridge + Matrix)
+- Real-time message monitoring via mautrix-googlechat bridge, AI categorize, auto-reply
 - Commands: `/chat-scan`, `/chat-reply`, `/chat-spaces`
 - Agent: `chat-categorizer` — classifies messages and drafts replies
 - Continuous mode: `/loop 5m /chat-scan`
@@ -37,7 +37,7 @@ Work autopilot plugin for Claude Code — integrates Google Chat, Jira, Confluen
 
 | Tool | Install | Purpose |
 |------|---------|---------|
-| Chrome + DevTools MCP | Chrome with DevTools protocol | Google Chat (via browser) |
+| Docker | `brew install docker` | Synapse + mautrix bridge for Google Chat |
 | `jira` | `brew install ankitpokhrel/jira-cli/jira` | Jira issues/sprints |
 | `atlassian-cli` | `brew install atlassian-cli` | Confluence + Jira |
 | `glab` | `brew install glab` | GitLab MRs/pipelines |

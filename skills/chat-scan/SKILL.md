@@ -2,95 +2,118 @@
 name: chat-scan
 description: >-
   Scan Google Chat for new messages. This skill should be invoked with
-  "/chat-scan" to read the Google Chat web UI via Chrome DevTools MCP,
-  detect unread messages across monitored spaces, categorize them,
-  auto-reply to routine ones, and surface actionable items.
+  "/chat-scan" to sync new messages via Matrix API (mautrix-googlechat bridge),
+  categorize them, auto-reply to routine ones, and surface actionable items.
   Compatible with "/loop 5m /chat-scan" for continuous monitoring.
-argument-hint: "[--setup] [--dry-run] [--mentions-only]"
-allowed-tools: ["Read", "Write", "Edit", "Agent", "mcp__plugin_chrome-devtools-mcp_chrome-devtools__list_pages", "mcp__plugin_chrome-devtools-mcp_chrome-devtools__new_page", "mcp__plugin_chrome-devtools-mcp_chrome-devtools__select_page", "mcp__plugin_chrome-devtools-mcp_chrome-devtools__navigate_page", "mcp__plugin_chrome-devtools-mcp_chrome-devtools__take_snapshot", "mcp__plugin_chrome-devtools-mcp_chrome-devtools__take_screenshot", "mcp__plugin_chrome-devtools-mcp_chrome-devtools__evaluate_script", "mcp__plugin_chrome-devtools-mcp_chrome-devtools__click", "mcp__plugin_chrome-devtools-mcp_chrome-devtools__fill", "mcp__plugin_chrome-devtools-mcp_chrome-devtools__press_key", "mcp__plugin_chrome-devtools-mcp_chrome-devtools__wait_for"]
-version: 0.3.0
+  Uses real-time sync — no polling delay.
+argument-hint: "[--setup] [--dry-run] [--full-sync]"
+allowed-tools: ["Bash", "Read", "Write", "Edit", "Agent"]
+version: 1.0.0
 ---
 
 # Chat Scan
 
-Scan Google Chat for new messages via Chrome DevTools MCP — no API permissions needed.
+Scan Google Chat for new messages via Matrix sync API — real-time, structured, reliable.
 
 ## Arguments
 
-- `--setup` — Run first-time setup: verify Chrome tab, extract tone profile
+- `--setup` — Run first-time setup: verify bridge connection, build room map, extract tone
 - `--dry-run` — Scan and categorize but don't send any auto-replies
-- `--mentions-only` — Only scan @mentions (faster, uses "Lượt đề cập" view)
-
-## Key Insight: Home Feed
-
-Google Chat's home page (`chat.google.com/app/home`) shows a **unified feed of all recent messages across all spaces and DMs** — with sender, time, space name, message preview, and unread indicators. This eliminates the need to click into each space individually.
-
-The home feed also provides:
-- **"Chưa đọc" toggle** — filters to only unread messages
-- **"Lượt đề cập" shortcut** — shows only @mentions directed at you (with unread count)
-- **Thread context** — shows both the original message and the latest reply in threads
-- **Live updates** — the ARIA live region announces new messages in real-time
-
-**One snapshot of the home feed = all recent messages.** Only click into a space when you need full thread context or to send a reply.
+- `--full-sync` — Force a full sync (ignore saved since_token), useful for rebuilding state
 
 ## Execution Flow
 
-### 1. Connect to Google Chat Tab
+### 1. Load Config & State
 
-Use `list_pages` to find an open tab with URL containing `chat.google.com`.
+Read environment variables from `.env`:
+```bash
+MATRIX_HOMESERVER=http://localhost:8008
+MATRIX_ACCESS_TOKEN=syt_xxx
+```
 
-- **If found:** `select_page` with that pageId
-- **If not found:** `new_page` with url `https://chat.google.com`
-  - After page loads, `take_snapshot` to verify user is logged in
-  - If login page detected: instruct user to log in manually, then re-run
+Read `.claude/gchat-autopilot.local.md` for:
+- `room_map` — Matrix room ID → Google Chat space name mapping
+- `monitored_rooms` — whitelist of rooms to monitor
+- `tone_profile` — for reply drafting
 
 If state file doesn't exist or `--setup` flag passed, run **First-Time Setup** (see below).
 
-### 2. Load State
+### 2. Get New Messages
 
-Read `.claude/gchat-autopilot.local.md` for account, last scan timestamp, tone profile, and monitored spaces.
+**Option A — Read from inbox (preferred, when listener is running):**
 
-### 3. Navigate to Home & Read Feed
+Check if the listener daemon is running and `.claude/gchat-inbox.jsonl` has content:
 
-Ensure we're on the home page. If not, `navigate_page` to `https://chat.google.com/app/home`.
+```bash
+INBOX=".claude/gchat-inbox.jsonl"
+INBOX_TMP=".claude/gchat-inbox.processing.jsonl"
+if [ -f "$INBOX" ] && [ -s "$INBOX" ]; then
+  # Atomically swap the inbox to avoid losing messages the listener writes during processing
+  mv "$INBOX" "$INBOX_TMP"
+  # Read all messages from the swapped file
+  MESSAGES=$(cat "$INBOX_TMP")
+  # Clean up after processing
+  rm -f "$INBOX_TMP"
+fi
+```
 
-**Option A — Full scan (default):**
-1. `take_snapshot` of the home feed
-2. The home feed shows all recent conversations as `listitem level="1"` elements
-3. Each item contains: space/DM name, timestamp, sender name, message preview, and unread indicator ("Chưa đọc")
-4. Thread items show "Chuỗi cuộc trò chuyện" with both original message and "Tin trả lời mới nhất" (latest reply)
+**Why atomic rename:** The listener daemon appends to the inbox concurrently. Using `> "$INBOX"` (truncate) is racy — messages written between `cat` and `>` would be lost. `mv` is atomic on the same filesystem, so the listener will create a fresh file on its next write.
 
-**Option B — Unread only (recommended for efficiency):**
-1. Find the "Chưa đọc" toggle switch in the home feed header
-2. `click` to enable it — filters feed to only unread messages
-3. `take_snapshot` to read the filtered feed
-4. After processing, `click` the toggle again to disable the filter
+Each line is a JSON object with: `room_id`, `room_name`, `sender`, `body`, `timestamp`, `event_id`, `thread_event_id`.
 
-**Option C — Mentions only (`--mentions-only`):**
-1. `click` the "Lượt đề cập" shortcut in the sidebar (shows @mentions with unread count)
-2. `take_snapshot` to read the mentions feed
-3. Navigate back to home when done
+This is instant — messages are already waiting in the file, collected in real-time by the listener.
 
-### 4. Parse Messages from Snapshot
+**Option B — Direct sync (fallback, when listener is not running):**
 
-From the home feed snapshot, extract each message item:
+```bash
+SINCE_TOKEN=$(cat .claude/gchat-sync-token.txt 2>/dev/null || echo "")
+curl -s "$MATRIX_HOMESERVER/_matrix/client/v3/sync?since=$SINCE_TOKEN&timeout=30000" \
+  -H "Authorization: Bearer $MATRIX_ACCESS_TOKEN"
+```
+
+The `timeout=30000` makes this a **long-poll** — the server holds the connection up to 30s and returns immediately when new events arrive.
+
+**Option C — Full sync (`--full-sync`):**
+
+Omit the `since` parameter to get all rooms and recent messages. Useful for rebuilding state.
+
+For `--full-sync`, omit the `since` parameter to get all rooms and recent messages.
+
+### 3. Parse Sync Response
+
+From the sync response JSON, extract new messages:
 
 ```
-For each listitem level="1":
-  - Space/DM name: first StaticText (e.g., "[ABC] [Tech] MoMo App Platform")
-  - Timestamp: StaticText with time pattern (e.g., "19 phút", "17:15", "Hôm qua")
-  - Unread: presence of "Chưa đọc" StaticText
-  - Sender: StaticText with full name pattern "NAME - DEPT - Role"
-  - Message text: remaining StaticText content
-  - Thread: "Chuỗi cuộc trò chuyện" indicates threaded, "Tin trả lời mới nhất" has latest reply
-  - @mention: look for "Bạn:" prefix (your own messages) to skip, or @mentions of your name
+response.rooms.join → for each room_id:
+  .timeline.events → filter for type "m.room.message"
+    → extract: sender, content.body, origin_server_ts, event_id
+    → check content.m.relates_to for thread context
 ```
 
 **Filter rules:**
-- Skip items where sender starts with "Bạn:" (your own messages)
-- Skip items older than `last_scan` timestamp
-- Skip spaces not in `monitored_spaces` whitelist (unless `monitored_spaces: all`)
-- If `monitor_all_dms: true`, include all DM items regardless of whitelist
+- Skip events where sender matches your own puppet ID (your own messages)
+- Skip rooms not in `monitored_rooms` (unless `monitored_rooms: all`)
+- Skip `blacklisted_rooms` entirely (filtered at listener level — these never appear in inbox)
+- For `mention_only_rooms`, only messages @mentioning you pass through (also filtered at listener level)
+- Skip non-message events (state changes, reactions, etc. — unless actionable)
+- Resolve room names from `room_map` (or from `state.events` with `m.room.name`)
+
+**Save `next_batch`** from response as the new `matrix_since_token` in state file.
+
+### 4. Build Message List
+
+For each new message, construct:
+
+```
+- room_id: "!abc:localhost"
+- room_name: "[QLCT] The worker" (from room_map)
+- sender: "NGUYỄN THỊ QUỲNH NHƯ" (display name of bridged user)
+- message: "EXPENSE-4448 [APP] Thêm CTA nhập giao dịch"
+- timestamp: "2026-03-25T11:40:00+07:00" (from origin_server_ts)
+- event_id: "$eventXYZ"
+- thread_event_id: "$threadRoot" or null
+- is_dm: true/false (based on room type)
+```
 
 ### 5. Categorize Messages
 
@@ -101,26 +124,46 @@ Spawn the `chat-categorizer` agent with the batch of new messages and the tone p
 For each categorized message:
 
 - **FYI / Social** (auto-reply enabled, unless `--dry-run`):
-  1. `click` the message item in the home feed to navigate to that space
-  2. `take_snapshot` → find the message input element
-  3. `click` the input to focus it
-  4. `fill` with the auto-reply text
-  5. `press_key` with key `Enter` to send
-  6. `navigate_page` back to home feed for the next reply
+  ```bash
+  # URL-encode room ID (contains ! and :)
+  ENC_ROOM=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$ROOM_ID'))")
+  TXN_ID=$(date +%s%N)
+
+  # Simple reply
+  curl -s -X PUT "$MATRIX_HOMESERVER/_matrix/client/v3/rooms/$ENC_ROOM/send/m.room.message/$TXN_ID" \
+    -H "Authorization: Bearer $MATRIX_ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"msgtype":"m.text","body":"Noted nha, cảm ơn!"}'
+
+  # Thread reply (if message is in a thread)
+  curl -s -X PUT "$MATRIX_HOMESERVER/_matrix/client/v3/rooms/$ENC_ROOM/send/m.room.message/$TXN_ID" \
+    -H "Authorization: Bearer $MATRIX_ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"msgtype":"m.text","body":"Noted nha!","m.relates_to":{"rel_type":"m.thread","event_id":"$THREAD_ROOT"}}'
+
+  # Emoji reaction (for social/emoji-only messages)
+  curl -s -X PUT "$MATRIX_HOMESERVER/_matrix/client/v3/rooms/$ENC_ROOM/send/m.reaction/$TXN_ID" \
+    -H "Authorization: Bearer $MATRIX_ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"m.relates_to":{"rel_type":"m.annotation","event_id":"$EVENT_ID","key":"👍"}}'
+  ```
 
 - **Urgent / Action Needed**: Add to `pending_drafts` in state file with:
-  - space name, thread context, message preview, sender, category, draft reply, timestamp
+  - room_id, event_id, thread_event_id, sender, message_preview, category, draft_reply, timestamp
 
 If `--dry-run`, skip sending and just display the categorization results.
 
 ### 7. Update State
 
-Update `last_scan` timestamp in `.claude/gchat-autopilot.local.md`.
+Update `.claude/gchat-autopilot.local.md`:
+- `matrix_since_token` — new sync token
+- `pending_drafts` — any new drafts added
+- `room_map` — any new rooms discovered in this sync
 
 ### 8. Display Summary
 
 ```
-📬 Chat Scan Complete — 12 new messages
+📬 Chat Scan Complete — 12 new messages (synced in 0.3s)
 
 🔴 Urgent (1):
   • [Happy User] NGÔ THỊ HỒNG THẢO: "Giao dịch bị treo, cần chuyển tiền gấp"
@@ -139,54 +182,41 @@ Update `last_scan` timestamp in `.claude/gchat-autopilot.local.md`.
   • [Trackify] NGUYỄN THANH HẢI: "Release note E2E Duration" → "Noted, cảm ơn!"
   ...
 
-⚪ Skipped (2): bot messages, non-monitored spaces
+⚪ Skipped (2): bot messages, non-monitored rooms
 ```
 
 ## First-Time Setup
 
 When no state file exists or `--setup` is passed:
 
-1. **Connect to Chrome** — Find or open Google Chat tab (step 1 above)
-2. **Verify login** — `take_snapshot` to confirm user is logged in (look for account button in header)
-3. **Detect account** — Read account name from the header button (e.g., "Tài khoản Google: NAME (email)")
-4. **Scan sidebar** — Extract all visible spaces from "Tin nhắn trực tiếp" (DMs) and "Không gian" (Spaces) sections
-5. **Learn tone** — From the home feed, identify messages where sender is "Bạn:" (your messages), extract language/style patterns. If not enough samples, click into 2-3 spaces to see more of your messages.
-6. **Create state file** — Write `.claude/gchat-autopilot.local.md` with:
-   - account (from header), chat_tab_url, monitored_spaces, tone_profile
-7. **Confirm** — Show extracted tone profile and space list, ask user to confirm or adjust
+### Prerequisites Check
+1. Verify bridge is running: `docker compose -f ~/.mautrix-googlechat/docker-compose.yml ps`
+2. Verify Matrix access: `curl -s "$MATRIX_HOMESERVER/_matrix/client/v3/account/whoami" -H "Authorization: Bearer $MATRIX_ACCESS_TOKEN"`
+3. If bridge not set up: direct user to `references/mautrix-setup.md`
 
-## Snapshot Structure Reference
+### Build Room Map
+1. `curl` the `/joined_rooms` endpoint to list all bridged rooms
+2. For each room, `curl` `/rooms/$ROOM_ID/state/m.room.name` to get the Google Chat space name
+3. Build the `room_map` dictionary: `room_id → space_name`
+4. Identify DMs (rooms with only 2 members — you and one puppet user)
 
-The home feed snapshot follows this structure:
+### Learn Tone
+1. Pick 3-4 active rooms from the room map
+2. Fetch recent messages: `curl` `/rooms/$ROOM_ID/messages?dir=b&limit=50`
+3. Filter for messages from your own puppet (sender matches your Google Chat puppet ID)
+4. Extract language, formality, common phrases, avg length
 
-```
-region "Trang chủ..."
-  switch "Chưa đọc"              ← toggle for unread filter
-  button "Chuỗi cuộc trò chuyện" ← thread view toggle
-  button "Chia màn hình..."       ← split pane toggle
-  generic
-    listitem level="1"            ← each message/conversation
-      StaticText "Space Name"
-      StaticText "Timestamp"
-      StaticText "Chưa đọc"      ← present if unread
-      StaticText "Sender Name: "
-      StaticText "Message preview..."
-    listitem level="1"            ← next message
-      ...
-```
+### Create State File
+Write `.claude/gchat-autopilot.local.md` with:
+- account, matrix_since_token, room_map, monitored_rooms, tone_profile
 
-Sidebar shortcuts (for mentions):
-```
-generic "Lối tắt đến Lượt đề cập, N tin nhắn chưa đọc"
-  StaticText "Lượt đề cập"
-  StaticText "N"                  ← unread mention count
-```
+### Confirm
+Show extracted tone profile and room list, ask user to confirm or adjust.
 
 ## Error Handling
 
-- If Chrome not connected / MCP server not running: instruct user to check Chrome DevTools MCP setup
-- If Google Chat tab not found: open one with `new_page`
-- If not logged in: instruct user to log in and re-run
-- If home feed is empty or loading: wait briefly with `wait_for`, retry snapshot
-- If message input not found when replying: take screenshot for debugging, skip reply
-- If DOM structure changed: fall back to `evaluate_script` for data extraction
+- If Matrix homeserver unreachable: check Docker containers are running
+- If 401 Unauthorized: access token expired, re-login and update `.env`
+- If sync returns empty rooms: bridge may be disconnecting, check bridge logs
+- If bridge disconnected from Google Chat: cookies expired, re-authenticate (see setup guide)
+- If a room is missing from room_map: run `--full-sync` to rebuild

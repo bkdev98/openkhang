@@ -1,2 +1,18 @@
-# State file contains user account email
+# Environment / secrets
+.env
+.zeroclaw/
+
+# Claude local state (user-specific, runtime)
 .claude/*.local.md
+.claude/*.local.json
+.claude/settings.local.json
+
+# Bridge runtime data
+.claude/gchat-inbox.jsonl
+.claude/gchat-sync-token.txt
+.claude/matrix-listener.log
+.claude/matrix-listener.pid
+
+# Python
+__pycache__/
+*.pyc
