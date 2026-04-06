@@ -7,9 +7,11 @@ ConfidenceScorer, DraftQueue, and MatrixSender.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from ..memory.client import MemoryClient
@@ -72,6 +74,7 @@ class AgentPipeline:
         self._classifier = Classifier()
         self._prompt_builder = PromptBuilder()
         self._scorer = ConfidenceScorer()
+        self._style_examples = self._load_style_examples()
 
     @classmethod
     def from_env(cls) -> "AgentPipeline":
@@ -171,13 +174,14 @@ class AgentPipeline:
                 except Exception:
                     has_history_in_room = True  # fail-open
 
-            # Step 4: build prompt
+            # Step 4: build prompt (inject style examples for outward mode)
             messages = self._prompt_builder.build(
                 mode=mode,
                 intent=intent,
                 memories=memories,
                 sender_context=sender_context,
                 event=event,
+                style_examples=self._style_examples if mode == "outward" else None,
             )
 
             # Step 5: LLM call — lower temperature for outward (style consistency)
@@ -229,6 +233,27 @@ class AgentPipeline:
                 error=str(exc),
                 latency_ms=latency_ms,
             )
+
+    # ------------------------------------------------------------------
+    # Style examples
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_style_examples() -> list[dict]:
+        """Load Khanh's sent messages as few-shot style examples."""
+        style_path = Path(__file__).parent.parent.parent / "config" / "style_examples.jsonl"
+        if not style_path.exists():
+            return []
+        examples = []
+        try:
+            with open(style_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        examples.append(json.loads(line))
+        except Exception:
+            pass
+        return examples
 
     # ------------------------------------------------------------------
     # Room history check
