@@ -107,7 +107,7 @@ class MemoryConfig:
             return {
                 "provider": "gemini",
                 "config": {
-                    "model": "gemini-3-flash-preview",
+                    "model": "gemini-2.5-flash",
                     "api_key": self.gemini_api_key,
                 },
             }
