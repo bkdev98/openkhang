@@ -82,29 +82,35 @@ def get_room_name(hs: str, token: str, room_id: str) -> str:
 def extract_addressing_patterns(own_messages: list[dict]) -> dict[str, list[str]]:
     """Analyze how Khanh addresses different people.
 
-    Returns: {person_id: [addressing_terms_used]}
-    E.g. {"TRẦN ĐÌNH CHƯƠNG": ["anh", "a"], "NGUYỄN TẤN KHANG": ["Khang"]}
+    Returns: {person_name: [addressing_terms_used]}
+    E.g. {"TRẦN ĐÌNH CHƯƠNG": ["anh"], "NGUYỄN TẤN KHANG": ["em"]}
     """
     import re
+    address_terms = {"anh", "chị", "chi", "a", "c", "em", "e", "bạn", "bro", "dạ"}
     patterns = defaultdict(list)
 
     for msg in own_messages:
-        body = msg.get("content", {}).get("body", "")
-        # Look for @mentions with titles
-        mentions = re.findall(r"@([^-\n]+?)(?:\s*-\s*ITC)", body)
-        for name in mentions:
-            name = name.strip()
-            # Check what comes before the @mention
-            idx = body.find(f"@{name}")
-            if idx > 0:
-                prefix = body[:idx].strip().split()[-1] if body[:idx].strip() else ""
-                if prefix.lower() in ("anh", "chị", "chi", "a", "c", "em", "bạn", "bro"):
-                    patterns[name].append(prefix.lower())
+        body = msg.get("body", "") or msg.get("content", {}).get("body", "")
+        if not body:
+            continue
 
-        # Also check for standalone addressing at start of message
-        first_word = body.split()[0].lower() if body.split() else ""
-        if first_word in ("anh", "chị", "chi", "em", "dạ", "bạn"):
-            patterns["_default_tone"].append(first_word)
+        # Look for @mentions with titles (e.g. @NAME - ITC - ...)
+        for match in re.finditer(r"@([^-\n]+?)\s*-\s*ITC", body):
+            name = match.group(1).strip()
+            idx = match.start()
+            if idx > 0:
+                prefix_text = body[:idx].strip()
+                if prefix_text:
+                    last_word = prefix_text.split()[-1].lower().rstrip(",.:!")
+                    if last_word in address_terms:
+                        patterns[name].append(last_word)
+
+        # Standalone addressing at start of message
+        words = body.split()
+        if words:
+            first = words[0].lower().rstrip(",.:!")
+            if first in address_terms:
+                patterns["_default_tone"].append(first)
 
     return dict(patterns)
 

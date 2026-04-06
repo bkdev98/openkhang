@@ -193,6 +193,20 @@ class PromptBuilder:
             lines.append("  - Senior/manager → call them \"anh/chị\", refer to self as \"em\"")
             if address.get("never_assume_tu"):
                 lines.append("- NEVER use \"tao/mày\" or overly casual forms")
+            # Inject known addressing patterns from real conversations
+            addr_patterns = self._load_addressing_patterns()
+            if addr_patterns:
+                lines.append("\n### Known addressing (from your real messages)")
+                for person, terms in addr_patterns.items():
+                    if person == "_default_tone":
+                        continue
+                    unique = list(set(terms))
+                    lines.append(f"- {person}: you call them \"{'/'.join(unique)}\"")
+                if "_default_tone" in addr_patterns:
+                    from collections import Counter
+                    tone = Counter(addr_patterns["_default_tone"])
+                    top = tone.most_common(3)
+                    lines.append(f"- Your default tone: {', '.join(f'{t} ({n}x)' for t, n in top)}")
 
         phrases = persona.get("uncertainty_phrases", {})
         if phrases:
@@ -202,6 +216,15 @@ class PromptBuilder:
                     lines.append(f"- ({lang}) \"{p}\"")
 
         return "\n".join(lines)
+
+    def _load_addressing_patterns(self) -> dict:
+        """Load addressing_patterns.json (re-reads each time for hot reload)."""
+        import json
+        addr_path = PERSONA_PATH.parent / "addressing_patterns.json"
+        try:
+            return json.loads(addr_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
 
     def _load_persona(self) -> dict:
         """Load persona.yaml. Re-reads from disk each time (no cache) so edits take effect on next request."""
