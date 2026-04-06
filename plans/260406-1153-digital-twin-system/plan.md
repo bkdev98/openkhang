@@ -1,7 +1,7 @@
 ---
 title: "Digital Twin System for Software Engineer Work Persona"
 description: "Transform openkhang from a Claude Code plugin into a full digital twin that acts as Khanh in Google Chat and assists via dashboard"
-status: pending
+status: done
 priority: P1
 effort: 40h
 branch: main
@@ -36,9 +36,9 @@ Google Chat ←→ mautrix bridge ←→ Synapse ←→ matrix-listener.py
 | 1 | [Memory Foundation](phase-01-memory-foundation.md) | 8h | **Done** | — | services/memory/ |
 | 2 | [Knowledge Ingestion](phase-02-knowledge-ingestion.md) | 8h | **Done** | Phase 1 | services/ingestion/ |
 | 3 | [Dual-Mode Agent](phase-03-dual-mode-agent.md) | 10h | **Done** | Phase 1 | services/agent/ |
-| 4 | [Workflow Engine](phase-04-workflow-engine.md) | 6h | Pending | Phase 3 | services/workflow/ |
-| 5 | [Dashboard](phase-05-dashboard.md) | 6h | Pending | Phase 3 | services/dashboard/ |
-| 6 | [Integration & Polish](phase-06-integration-polish.md) | 2h | Pending | All | docker-compose.yml |
+| 4 | [Workflow Engine](phase-04-workflow-engine.md) | 6h | **Done** | Phase 3 | services/workflow/ |
+| 5 | [Dashboard](phase-05-dashboard.md) | 6h | **Done** | Phase 3 | services/dashboard/ |
+| 6 | [Integration & Polish](phase-06-integration-polish.md) | 2h | **Done** | All | docker-compose.yml |
 
 ## Dependency Graph
 

@@ -1,7 +1,7 @@
 {
   "name": "openkhang",
-  "version": "0.1.0",
-  "description": "Work autopilot — Google Chat triage, Jira sprint monitoring, Confluence docs, GitLab code sessions with pipeline watching. Integrates all tools into autonomous workflows.",
+  "version": "0.2.0",
+  "description": "Digital twin for your work persona — dual-mode AI agent (acts as you in chat, assists via dashboard), memory system (Mem0 + pgvector), workflow engine, and knowledge ingestion from Google Chat, Jira, GitLab, Confluence.",
   "author": {
     "name": "quocs"
   },

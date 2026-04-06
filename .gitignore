@@ -19,3 +19,6 @@ __pycache__/
 
 # Memory data
 *.db
+
+# Python venv
+services/.venv/

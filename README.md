@@ -1,90 +1,138 @@
 # openkhang
 
-Work autopilot plugin for Claude Code — integrates Google Chat, Jira, Confluence, and GitLab into autonomous workflows.
+Digital twin for your work persona — integrates Google Chat, Jira, Confluence, and GitLab into an autonomous AI agent that can reply as you, manage tasks, and monitor workflows.
 
-## Blocks
+## Architecture
 
-### Google Chat (mautrix bridge + Matrix)
-- Real-time message monitoring via mautrix-googlechat bridge, AI categorize, auto-reply
-- Commands: `/chat-scan`, `/chat-reply`, `/chat-spaces`
-- Agent: `chat-categorizer` — classifies messages and drafts replies
-- Continuous mode: `/loop 5m /chat-scan`
+```
+Google Chat ←→ mautrix bridge ←→ Synapse ←→ matrix-listener
+                                                   │
+                                             Redis event bus
+                                                   │
+             ┌─────────────────┬───────────────────┼───────────────────┐
+             ▼                 ▼                   ▼                   ▼
+       Knowledge          Mem0 + pgvector    Dual-Mode Agent      Dashboard
+       Ingestion          (Memory Layer)     (Outward/Inward)   (FastAPI+HTMX)
+       Pipeline                │                   │               :8000
+  Jira/GitLab/Confluence       └───────┬───────────┘
+  → chunk → embed → store             ▼
+                             Workflow Engine
+                             (YAML state machines, audit log)
+```
 
-### Jira (`jira-cli` + `atlassian-cli`)
-- Sprint board with burndown and health indicators
-- Auto-prioritize tickets by urgency, blockers, dependencies
-- Commands: `/sprint-board`, `/sprint-prioritize`
-- Agent: `sprint-monitor` — velocity analysis and risk alerts
+### Dual-Mode Agent
 
-### Confluence (`atlassian-cli`)
-- Search and read documentation pages
-- Create and update pages
-- Commands: `/confluence-search`, `/confluence-update`
+The agent operates in two modes:
+- **Outward**: Acts AS you to colleagues in Google Chat — replies in your voice/style, grounded by RAG
+- **Inward**: Acts AS your assistant via dashboard — reports, drafts, takes instructions
 
-### GitLab (`glab`)
-- Full code session workflow: ticket → branch → implement → MR → pipeline
-- Pipeline monitoring with auto-retry and auto-fix
-- MR management (list, approve, merge)
-- Commands: `/code-session`, `/pipeline-watch`, `/mr-manage`
-- Agents: `pipeline-fixer` (auto-fix CI failures), `bug-investigator` (triage urgent bugs)
+### Memory System
 
-### Orchestrator
-- Unified status dashboard: `/openkhang-status`
-- Urgent ticket detection hook (auto-triggers bug investigation)
-- Cross-block integration: chat → jira → code-session → pipeline
+Three-layer memory powered by Mem0:
+- **Semantic**: Vector search (pgvector + bge-m3) for knowledge retrieval
+- **Episodic**: Append-only Postgres event log (chat messages, Jira updates, pipeline events)
+- **Working**: In-memory session context with 30-min TTL
+
+## Quick Start
+
+```bash
+# 1. Clone and configure
+cp .env.example .env    # Edit with your API keys
+
+# 2. Run onboarding
+bash scripts/onboard.sh
+
+# 3. Start the dashboard
+bash scripts/run-dashboard.sh
+# → http://localhost:8000
+
+# 4. Start chat listener (background)
+python3 scripts/matrix-listener.py --daemon
+```
 
 ## Prerequisites
 
 | Tool | Install | Purpose |
 |------|---------|---------|
-| Docker | `brew install docker` | Synapse + mautrix bridge for Google Chat |
-| `jira` | `brew install ankitpokhrel/jira-cli/jira` | Jira issues/sprints |
-| `atlassian-cli` | `brew install atlassian-cli` | Confluence + Jira |
-| `glab` | `brew install glab` | GitLab MRs/pipelines |
+| Docker | `brew install docker` | Postgres, Redis, Synapse, mautrix bridge |
+| Ollama | `brew install ollama` | Local bge-m3 embeddings (runs natively on Apple Silicon) |
+| Python 3.12+ | System or brew | Memory, agent, ingestion, dashboard services |
+| `jira` | `brew install ankitpokhrel/jira-cli/jira` | Jira ticket ingestion |
+| `glab` | `brew install glab` | GitLab MR/pipeline ingestion |
 
-## Installation
+## Services
 
-### From marketplace
-
-```bash
-/plugin marketplace add bkdev98/openkhang
-/plugin install openkhang@openkhang
-```
-
-### For development
-
-```bash
-claude --plugin-dir /path/to/openkhang
-```
-
-## Quick Start
-
-```bash
-# First-time setup for each block
-/chat-scan --setup        # Configure Google Chat account + learn tone
-/sprint-board             # Configure Jira project + board
-/confluence-search test   # Configure Confluence (auto on first use)
-/code-session --project   # Configure GitLab project
-
-# Daily workflow
-/openkhang-status         # See everything at a glance
-/loop 5m /chat-scan       # Start chat monitoring
-/sprint-prioritize        # Plan your work order
-/code-session PROJ-123    # Start coding a ticket
-/pipeline-watch           # Monitor the build
-```
+| Service | Port | Description |
+|---------|------|-------------|
+| Postgres + pgvector | 5433 | Memory storage, event log, draft queue, workflow state |
+| Redis | 6379 | Event bus (pub/sub between services) |
+| Ollama | 11434 | bge-m3 embeddings (1024-dim, Vietnamese+English) |
+| Synapse | 8008 | Matrix homeserver for Google Chat bridge |
+| Dashboard | 8000 | Web UI: activity feed, draft review, health, twin chat |
 
 ## Configuration
 
-All state stored in `.claude/openkhang.local.md` (auto-created, gitignored).
+### Persona (`config/persona.yaml`)
+Defines the twin's identity, communication style, and safety rules.
 
-## Components
+### Confidence Thresholds (`config/confidence_thresholds.yaml`)
+Per-room thresholds for auto-reply. Default 0.85 — all spaces start in draft mode.
+
+### Workflows (`config/workflows/*.yaml`)
+YAML state machines for cross-tool automation (e.g., chat→jira→code→pipeline).
+
+## Plugin Skills (Claude Code)
 
 | Type | Count | Items |
 |------|-------|-------|
-| Skills (knowledge) | 4 | chat-autopilot, jira-knowledge, confluence-knowledge, gitlab-knowledge |
-| Skills (commands) | 7 | chat-scan, chat-reply, chat-spaces, sprint-board, sprint-prioritize, confluence-search, confluence-update |
-| Skills (gitlab) | 3 | code-session, pipeline-watch, mr-manage |
-| Skills (orchestrator) | 1 | openkhang-status |
-| Agents | 4 | chat-categorizer, sprint-monitor, pipeline-fixer, bug-investigator |
-| Hooks | 2 | SessionStart (pending drafts), UserPromptSubmit (urgent ticket detection) |
+| Chat | 5 | chat-scan, chat-reply, chat-spaces, chat-auth, chat-listen |
+| Jira | 2 | sprint-board, sprint-prioritize |
+| GitLab | 3 | code-session, pipeline-watch, mr-manage |
+| Confluence | 2 | confluence-search, confluence-update |
+| Orchestrator | 1 | openkhang-status |
+
+## Project Structure
+
+```
+openkhang/
+├── services/
+│   ├── memory/        # Mem0 + pgvector + episodic store
+│   ├── ingestion/     # Chat, Jira, GitLab, Confluence ingestors
+│   ├── agent/         # Dual-mode agent pipeline + LLM client
+│   ├── workflow/      # YAML state machine engine
+│   └── dashboard/     # FastAPI + HTMX web UI
+├── config/
+│   ├── persona.yaml
+│   ├── confidence_thresholds.yaml
+│   └── workflows/     # YAML workflow definitions
+├── scripts/           # Setup, onboarding, run scripts
+├── skills/            # Claude Code plugin skills
+├── agents/            # Claude Code plugin agents
+├── hooks/             # Claude Code plugin hooks
+└── docker-compose.yml # Infrastructure services
+```
+
+## Development
+
+```bash
+# Run agent tests
+services/.venv/bin/python3 -m pytest services/agent/tests/ -v
+
+# Start dashboard with hot reload
+services/.venv/bin/uvicorn services.dashboard.app:app --reload --port 8000
+
+# Ingest chat history
+services/.venv/bin/python3 services/memory/ingest-chat-history.py
+
+# Check memory
+services/.venv/bin/python3 -c "
+import asyncio
+from dotenv import load_dotenv; load_dotenv()
+from services.memory.config import MemoryConfig
+from services.memory.client import MemoryClient
+async def q():
+    c = MemoryClient(MemoryConfig.from_env()); await c.connect()
+    r = await c.search('your query here'); print(r); await c.close()
+asyncio.run(q())
+"
+```

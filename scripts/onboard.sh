@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# onboard.sh — First-time setup for openkhang digital twin
+#
+# Steps:
+#   1. Check prerequisites (Docker, CLIs, Ollama)
+#   2. Set up .env if missing
+#   3. Start infrastructure (Postgres, Redis)
+#   4. Set up memory layer (schema, bge-m3)
+#   5. Start bridge if not running
+#   6. Run initial chat history ingestion
+#   7. Start dashboard
+#   8. Print summary
+#
+# Usage: bash scripts/onboard.sh
+
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+step()  { printf '\n%b==> %s%b\n' "$BOLD" "$*" "$NC"; }
+info()  { printf '  %b[info]%b %s\n' "$CYAN" "$NC" "$*"; }
+ok()    { printf '  %b[ok]%b %s\n' "$GREEN" "$NC" "$*"; }
+warn()  { printf '  %b[warn]%b %s\n' "$YELLOW" "$NC" "$*"; }
+fail()  { printf '  %b[fail]%b %s\n' "$RED" "$NC" "$*"; }
+
+# ── 1. Prerequisites ─────────────────────────────────────────────
+step "Checking prerequisites"
+
+MISSING=0
+for cmd in docker ollama python3; do
+    if command -v "$cmd" &>/dev/null; then
+        ok "$cmd found"
+    else
+        fail "$cmd not found"
+        MISSING=$((MISSING + 1))
+    fi
+done
+
+# Optional CLIs
+for cmd in jira glab; do
+    if command -v "$cmd" &>/dev/null; then
+        ok "$cmd found (optional)"
+    else
+        warn "$cmd not found — ${cmd} ingestion will be skipped"
+    fi
+done
+
+if [[ $MISSING -gt 0 ]]; then
+    fail "Missing required tools. Install them and re-run."
+    exit 1
+fi
+
+# ── 2. Environment ───────────────────────────────────────────────
+step "Checking environment"
+
+if [[ ! -f .env ]]; then
+    if [[ -f .env.example ]]; then
+        cp .env.example .env
+        warn ".env created from .env.example — edit it with your API keys"
+        info "At minimum, set ANTHROPIC_API_KEY"
+        read -rp "  Press Enter to continue after editing .env (or Ctrl+C to abort)... "
+    else
+        fail ".env.example not found"
+        exit 1
+    fi
+fi
+
+# Check critical env var
+if grep -q '^ANTHROPIC_API_KEY=sk-ant-' .env 2>/dev/null; then
+    ok "ANTHROPIC_API_KEY is set"
+else
+    warn "ANTHROPIC_API_KEY may not be set — Mem0 memory extraction will fail"
+fi
+
+# ── 3. Python venv ───────────────────────────────────────────────
+step "Setting up Python environment"
+
+if [[ ! -d services/.venv ]]; then
+    info "Creating virtual environment..."
+    python3 -m venv services/.venv
+fi
+
+info "Installing dependencies..."
+services/.venv/bin/pip install -q -r services/requirements.txt 2>&1 | tail -1
+ok "Python dependencies installed"
+
+# ── 4. Infrastructure ────────────────────────────────────────────
+step "Starting infrastructure (Postgres + Redis)"
+
+if ! docker info &>/dev/null; then
+    fail "Docker daemon not running. Start Docker Desktop first."
+    exit 1
+fi
+
+docker compose up -d postgres redis
+info "Waiting for Postgres..."
+for i in $(seq 1 20); do
+    if docker compose exec -T postgres pg_isready -U openkhang -d openkhang &>/dev/null; then
+        break
+    fi
+    sleep 2
+done
+ok "Postgres ready"
+
+# Apply schema
+docker compose exec -T postgres psql -U openkhang -d openkhang \
+    -f /docker-entrypoint-initdb.d/01-schema.sql &>/dev/null
+ok "Schema applied"
+
+# ── 5. Ollama + bge-m3 ──────────────────────────────────────────
+step "Setting up Ollama embeddings"
+
+if ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
+    info "Starting Ollama..."
+    ollama serve &>/dev/null &
+    sleep 5
+fi
+
+if ollama list 2>/dev/null | grep -q "bge-m3"; then
+    ok "bge-m3 model already available"
+else
+    info "Pulling bge-m3 model (~600MB)..."
+    ollama pull bge-m3
+    ok "bge-m3 pulled"
+fi
+
+# ── 6. Bridge check ─────────────────────────────────────────────
+step "Checking Matrix bridge"
+
+if curl -sf http://localhost:8008/_matrix/client/v3/login &>/dev/null; then
+    ok "Synapse is running on :8008"
+else
+    warn "Synapse not running. Run: bash scripts/setup-bridge.sh"
+fi
+
+# ── 7. Initial ingestion ────────────────────────────────────────
+step "Initial data check"
+
+EVENT_COUNT=$(docker compose exec -T postgres psql -U openkhang -d openkhang -tAc \
+    "SELECT count(*) FROM events;" 2>/dev/null || echo "0")
+
+if [[ "$EVENT_COUNT" -gt 0 ]]; then
+    ok "$EVENT_COUNT events already in memory"
+else
+    if [[ -f .claude/gchat-inbox.jsonl ]]; then
+        LINES=$(wc -l < .claude/gchat-inbox.jsonl | tr -d ' ')
+        info "$LINES chat messages found. Run ingestion with:"
+        info "  services/.venv/bin/python3 services/memory/ingest-chat-history.py"
+    else
+        info "No chat history yet. Start the listener: bash scripts/matrix-listener.py --daemon"
+    fi
+fi
+
+# ── 8. Summary ───────────────────────────────────────────────────
+step "Setup complete"
+
+cat <<EOF
+
+  ${BOLD}openkhang Digital Twin${NC}
+  ━━━━━━━━━━━━━━━━━━━━━
+
+  ${CYAN}Infrastructure:${NC}
+    Postgres + pgvector  → localhost:5433
+    Redis                → localhost:6379
+    Ollama (bge-m3)      → localhost:11434
+
+  ${CYAN}Commands:${NC}
+    Start dashboard:     bash scripts/run-dashboard.sh
+    Start chat listener: python3 scripts/matrix-listener.py --daemon
+    Ingest chat history: services/.venv/bin/python3 services/memory/ingest-chat-history.py
+    Run tests:           services/.venv/bin/python3 -m pytest services/agent/tests/ -v
+
+  ${CYAN}Dashboard:${NC}
+    http://localhost:8000
+
+  ${CYAN}Configuration:${NC}
+    Persona:    config/persona.yaml
+    Thresholds: config/confidence_thresholds.yaml
+    Workflows:  config/workflows/
+
+  ${CYAN}Documentation:${NC}
+    README.md for full guide
+
+EOF
