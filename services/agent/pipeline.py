@@ -89,7 +89,7 @@ class AgentPipeline:
         config = MemoryConfig.from_env()
         memory_client = MemoryClient(config)
         llm_client = LLMClient(
-            gemini_api_key=config.gemini_api_key,
+            meridian_url=os.environ.get("MERIDIAN_URL", ""),
             anthropic_api_key=config.anthropic_api_key,
         )
         draft_queue = DraftQueue(database_url=config.database_url)

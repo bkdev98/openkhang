@@ -42,9 +42,9 @@ class MemoryConfig:
 
         if not anthropic_key and not gemini_key:
             raise ValueError(
-                "Neither ANTHROPIC_API_KEY nor GEMINI_API_KEY is set. "
-                "Mem0 needs one for memory extraction (LLM call). "
-                "Add at least one to your .env file."
+                "GEMINI_API_KEY not set. Mem0 needs it for memory extraction. "
+                "Agent replies use MERIDIAN_URL (separate). "
+                "Add GEMINI_API_KEY to your .env file."
             )
 
         return cls(

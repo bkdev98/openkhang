@@ -34,6 +34,10 @@ Google Chat ←→ mautrix bridge ←→ Synapse ←→ matrix-listener
 - **Manager/Lead sender**: Always draft
 - **Room with no history**: Skip (only reply where you've chatted before)
 
+### LLM Providers
+
+Agent replies use **Meridian** (Claude Max subscription proxy, $0 marginal cost). Memory extraction uses Gemini 2.5 Flash (free tier). Meridian auto-starts with the dashboard — no separate terminal needed.
+
 ### Memory System
 
 Three-layer memory powered by Mem0 + Gemini 2.5 Flash:
@@ -45,7 +49,7 @@ Three-layer memory powered by Mem0 + Gemini 2.5 Flash:
 
 ```bash
 # 1. Clone and configure
-cp .env.example .env    # Set ANTHROPIC_API_KEY, GEMINI_API_KEY + work tool creds
+cp .env.example .env    # Set MERIDIAN_URL, GEMINI_API_KEY + work tool creds
 
 # 2. Run onboarding (checks prereqs, starts infra, pulls bge-m3)
 bash scripts/onboard.sh
@@ -61,7 +65,7 @@ services/.venv/bin/python3 scripts/full-chat-seed.py
 services/.venv/bin/python3 scripts/seed-knowledge.py --source jira
 services/.venv/bin/python3 scripts/seed-code.py
 
-# 6. Start the dashboard (includes agent relay + ingestion scheduler)
+# 6. Start the dashboard (includes agent relay + Meridian proxy + ingestion)
 bash scripts/run-dashboard.sh
 # → http://localhost:8000
 ```
@@ -73,6 +77,8 @@ bash scripts/run-dashboard.sh
 | Docker | `brew install docker` | Postgres, Redis, Synapse, mautrix bridge |
 | Ollama | `brew install ollama` | Local bge-m3 embeddings (native Apple Silicon) |
 | Python 3.12+ | System or brew | All services run in `services/.venv` |
+| Node.js 18+ | `brew install node` | Meridian proxy runtime |
+| Meridian | `npm install -g @rynfar/meridian` | Claude Max subscription proxy |
 | `jira` | `brew install ankitpokhrel/jira-cli/jira` | Jira ticket ingestion (optional) |
 | `glab` | `brew install glab` | GitLab MR ingestion (optional) |
 
@@ -80,6 +86,7 @@ bash scripts/run-dashboard.sh
 
 | Service | Port | Description |
 |---------|------|-------------|
+| Meridian | 3456 | Claude Max subscription proxy (auto-started with dashboard) |
 | Postgres + pgvector | 5433 | Memory, events, drafts, workflows |
 | Redis | 6379 | Event bus (pub/sub) |
 | Ollama (native) | 11434 | bge-m3 embeddings (1024-dim, Vietnamese+English) |
@@ -87,6 +94,20 @@ bash scripts/run-dashboard.sh
 | Dashboard | 8000 | Web UI: feed, drafts, health, twin chat |
 
 ## Configuration
+
+### LLM (`env`)
+
+```bash
+# Agent replies — Meridian proxy (uses Claude Max subscription, $0 marginal cost)
+# Auto-starts with dashboard if set. Falls back to ANTHROPIC_API_KEY if not set.
+MERIDIAN_URL=http://127.0.0.1:3456
+
+# Memory extraction — Gemini free tier (used by Mem0 only)
+GEMINI_API_KEY=AIza...
+
+# Fallback only — Claude API (paid per-token, used if MERIDIAN_URL is not set)
+ANTHROPIC_API_KEY=sk-ant-...
+```
 
 ### Persona (`config/persona.yaml`)
 Twin's identity, communication style, safety rules. **Edits take effect on next message** — no restart needed.

@@ -186,7 +186,7 @@ All ingestors call `MemoryClient.add_memory()` after chunking.
 - `classifier.py` (165 LOC) — `MessageClassifier`, LLM-based classification
 - `confidence.py` (255 LOC) — `ConfidenceScorer`, scoring + modifiers
 - `prompt_builder.py` (280 LOC) — `PromptBuilder`, system + user + context
-- `llm_client.py` (195 LOC) — `LLMClient`, Claude API wrapper with retry
+- `llm_client.py` (300 LOC) — `LLMClient`, multi-provider: Meridian (default) > Claude API (fallback)
 - `draft_queue.py` (225 LOC) — `DraftQueue`, manage pending/approved drafts
 - `matrix_sender.py` (155 LOC) — `MatrixSender`, send to Matrix homeserver
 - `prompts/outward_system.md` — System prompt for outward mode
@@ -208,8 +208,9 @@ class PromptBuilder:
     def add_rag_context(context: List[Dict]) -> str
 
 class LLMClient:
-    async def generate(system: str, user: str, temperature: float = 0.7) -> str
-    async def count_tokens(text: str) -> int
+    # Provider priority: Meridian ($0, Max subscription) > Claude API (paid fallback)
+    async def generate(messages: list, temperature: float = 0.3) -> LLMResponse
+    # Meridian auto-started by dashboard lifespan; uses httpx for async HTTP
 
 class DraftQueue:
     async def enqueue(draft: DraftReply)
@@ -394,7 +395,8 @@ CREATE TABLE mem0_memories (
 | Jira | REST API + jira CLI | Ingest issues, create tickets |
 | GitLab | glab CLI + REST API | Ingest MRs, trigger pipelines |
 | Confluence | REST API | Ingest pages, update docs |
-| Claude API | anthropic Python SDK | Generate responses, score confidence |
+| Meridian | @rynfar/meridian (localhost:3456) | Claude Max subscription proxy for agent replies |
+| Claude API | anthropic Python SDK (fallback) | Generate responses if Meridian unavailable |
 | Ollama | bge-m3 model (native M2) | Embeddings (1024-dim) |
 | Postgres | psycopg + pgvector | Memory, events, drafts, workflows |
 | Redis | aioredis | Pub/sub event bus, session store |
@@ -488,7 +490,7 @@ Ingestion     Agent Pipeline  Workflow Engine  Dashboard    Memory Service
 
 | File | Purpose |
 |------|---------|
-| `.env` | Secrets (API keys, DB creds) |
+| `.env` | Secrets (MERIDIAN_URL, GEMINI_API_KEY, DB creds) |
 | `config/persona.yaml` | Identity, style, never_do rules |
 | `config/confidence_thresholds.yaml` | Per-room auto-send thresholds |
 | `config/projects.yaml` | Code projects to index (3 repos) |

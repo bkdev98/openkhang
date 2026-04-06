@@ -1,8 +1,7 @@
-"""LLM client with multi-provider support (Gemini primary, Claude fallback).
+"""LLM client with multi-provider support.
 
-Handles API calls, retries, and structured output extraction for the agent pipeline.
-Prefers Gemini 2.5 Flash (free tier / high rate limits) when GEMINI_API_KEY is set.
-Falls back to Claude API when only ANTHROPIC_API_KEY is available.
+Provider priority: Meridian (Max subscription, $0) > Claude API (paid fallback).
+Meridian proxies Claude via local HTTP endpoint, billing against Max subscription.
 """
 
 from __future__ import annotations
@@ -17,8 +16,8 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # Default models per provider
-DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
-DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514"
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
+DEFAULT_MERIDIAN_MODEL = "claude-sonnet-4-6"
 
 # Appended to system prompt to request structured JSON output
 STRUCTURED_OUTPUT_INSTRUCTION = """
@@ -47,38 +46,36 @@ class LLMResponse:
 
 
 class LLMClient:
-    """Multi-provider LLM client: Gemini primary, Claude fallback.
+    """Multi-provider LLM client: Meridian (default) > Claude API (fallback).
 
     Usage:
-        # Auto-selects provider based on available keys
-        client = LLMClient(gemini_api_key="...", anthropic_api_key="...")
+        client = LLMClient(meridian_url="http://127.0.0.1:3456")
         response = await client.generate(messages, temperature=0.3)
     """
 
     def __init__(
         self,
-        gemini_api_key: str = "",
+        meridian_url: str = "",
         anthropic_api_key: str = "",
         *,
         # Legacy: accept api_key= for backward compat with agent_relay
         api_key: str = "",
     ) -> None:
-        self._gemini_key = gemini_api_key
         self._anthropic_key = anthropic_api_key or api_key
+        self._meridian_url = meridian_url.rstrip("/") if meridian_url else ""
         self._provider: str = ""
 
-        if self._gemini_key:
-            from google import genai
-            self._gemini_client = genai.Client(api_key=self._gemini_key)
-            self._provider = "gemini"
-            logger.info("LLMClient: using Gemini (%s)", DEFAULT_GEMINI_MODEL)
+        # Priority: Meridian (Max subscription, $0 marginal) > Claude API (paid fallback)
+        if self._meridian_url:
+            self._provider = "meridian"
+            logger.info("LLMClient: using Meridian at %s", self._meridian_url)
         elif self._anthropic_key:
             import anthropic
             self._anthropic_client = anthropic.AsyncAnthropic(api_key=self._anthropic_key)
             self._provider = "claude"
             logger.info("LLMClient: using Claude (%s)", DEFAULT_CLAUDE_MODEL)
         else:
-            raise ValueError("No LLM API key provided (need GEMINI_API_KEY or ANTHROPIC_API_KEY)")
+            raise ValueError("No LLM provider configured (need MERIDIAN_URL or ANTHROPIC_API_KEY)")
 
     async def generate(
         self,
@@ -98,15 +95,15 @@ class LLMClient:
             max_tokens: Maximum tokens in response.
             require_structured: If True, appends JSON output instruction to system prompt.
         """
-        if self._provider == "gemini":
-            return await self._generate_gemini(messages, model, temperature, max_tokens, require_structured)
+        if self._provider == "meridian":
+            return await self._generate_meridian(messages, model, temperature, max_tokens, require_structured)
         return await self._generate_claude(messages, model, temperature, max_tokens, require_structured)
 
     # ------------------------------------------------------------------
-    # Gemini provider
+    # Meridian provider (Claude via Max subscription proxy)
     # ------------------------------------------------------------------
 
-    async def _generate_gemini(
+    async def _generate_meridian(
         self,
         messages: list[dict],
         model: str | None,
@@ -114,55 +111,71 @@ class LLMClient:
         max_tokens: int,
         require_structured: bool,
     ) -> LLMResponse:
-        """Generate via Google Gemini API."""
-        from google.genai import types
+        """Generate via Meridian proxy (OpenAI-compatible endpoint).
 
-        model_id = model or DEFAULT_GEMINI_MODEL
+        Meridian runs locally and routes requests through Claude Agent SDK,
+        billing against Max subscription instead of API credits.
+        Uses httpx (transitive dep of anthropic SDK) for async HTTP.
+        """
+        import httpx
+
+        model_id = model or DEFAULT_MERIDIAN_MODEL
         system_prompt: Optional[str] = None
-        convo_contents: list[types.Content] = []
+        convo_messages: list[dict] = []
 
         for msg in messages:
             if msg.get("role") == "system":
                 system_prompt = msg["content"]
             else:
-                role = "model" if msg["role"] == "assistant" else "user"
-                convo_contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
+                convo_messages.append(msg)
 
         if require_structured:
             system_prompt = (system_prompt or "") + "\n\n" + STRUCTURED_OUTPUT_INSTRUCTION
 
+        if system_prompt:
+            convo_messages.insert(0, {"role": "system", "content": system_prompt})
+
+        payload = {
+            "model": model_id,
+            "messages": convo_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+
         t0 = time.monotonic()
         try:
-            config = types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=temperature,
-                max_output_tokens=max_tokens,
-            )
-            resp = await self._gemini_client.aio.models.generate_content(
-                model=model_id,
-                contents=convo_contents,
-                config=config,
-            )
-            latency_ms = int((time.monotonic() - t0) * 1000)
-            raw_text = resp.text or ""
-            # Gemini usage metadata
-            tokens_used = 0
-            if resp.usage_metadata:
-                tokens_used = (resp.usage_metadata.prompt_token_count or 0) + (resp.usage_metadata.candidates_token_count or 0)
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    f"{self._meridian_url}/v1/chat/completions",
+                    json=payload,
+                    headers={"Authorization": "Bearer placeholder"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
 
-        except Exception as exc:
-            raise RuntimeError(f"Gemini API error: {exc}") from exc
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            raw_text = data["choices"][0]["message"]["content"]
+            tokens_used = data.get("usage", {}).get("total_tokens", 0)
+
+        except httpx.ConnectError as exc:
+            raise RuntimeError(
+                f"Meridian not reachable at {self._meridian_url}. "
+                "Start it with: meridian"
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(f"Meridian error {exc.response.status_code}: {exc.response.text}") from exc
 
         return self._parse_response(
             raw_text=raw_text,
-            model_used=model_id,
+            model_used=f"meridian/{model_id}",
             tokens_used=tokens_used,
             latency_ms=latency_ms,
             structured=require_structured,
         )
 
     # ------------------------------------------------------------------
-    # Claude provider (fallback)
+    # Claude API provider (paid fallback)
     # ------------------------------------------------------------------
 
     async def _generate_claude(

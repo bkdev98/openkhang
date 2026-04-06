@@ -64,7 +64,7 @@ async def run_agent_relay(pool: asyncpg.Pool) -> None:
         await memory.connect()
 
         llm = LLMClient(
-            gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+            meridian_url=os.getenv("MERIDIAN_URL", ""),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
         )
         drafts = DraftQueue(config.database_url)

@@ -234,7 +234,7 @@ projects:
 - `classifier.py` — Message classification (work/question/social/humor/greeting)
 - `confidence.py` — Confidence scoring + modifiers (room, sender, history)
 - `prompt_builder.py` — Constructs system + user prompts with RAG context
-- `llm_client.py` — Claude API wrapper (with retry, token counting)
+- `llm_client.py` — Multi-provider LLM client: Meridian (default) > Claude API (fallback)
 - `draft_queue.py` — Manages pending drafts, approval workflow
 - `matrix_sender.py` — Sends approved reply back to Matrix (→ Google Chat)
 
@@ -255,7 +255,7 @@ projects:
    • Context: retrieved memory + code snippets
    • User: classify message + safety instructions
    ↓
-5. Call Claude API
+5. Call LLM via Meridian proxy (Claude Max subscription) or Claude API fallback
    → Generate draft reply + confidence score
    ↓
 6. Apply confidence modifiers:
@@ -478,7 +478,7 @@ async def check_health():
    context: retrieved memory + code snippets
    user: "Message from $sender (role: $role): $text"
    
-10. Call Claude API → get response + confidence_base
+10. Call LLM (Meridian → Claude Max subscription) → get response + confidence_base
     Response: "I'll take a look and leave feedback by EOD."
     confidence_base: 0.82
     
@@ -576,7 +576,8 @@ async def check_health():
 | Services ↔ Redis | Event bus | Localhost-only; no auth (internal) |
 | Services ↔ Ollama | Embedding | Localhost-only; no auth |
 | Dashboard ↔ User | Web browser | Future: session token auth |
-| Claude API calls | External | API key in .env; sent only context, no raw chat |
+| Meridian proxy | Local (localhost:3456) | Auto-started; routes to Claude Max subscription |
+| Claude API calls (fallback) | External | API key in .env; sent only context, no raw chat |
 
 ## Scalability Considerations
 
@@ -584,7 +585,7 @@ async def check_health():
 - **Memory:** Single Python process (agent + dashboard share); ~500MB heap
 - **Throughput:** ~100 messages/min (limited by Jira/GitLab polling, 30min cycle)
 - **Storage:** Postgres ~10GB for 1 year of events (estimate: 100 messages/day)
-- **Latency:** 2s message → draft (dominated by Claude API call)
+- **Latency:** 10-15s message → draft (dominated by Meridian/Claude proxy call)
 
 **Future Improvements:**
 - Separate services into microservices (memory, ingestion, agent, dashboard)

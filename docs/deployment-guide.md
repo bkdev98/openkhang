@@ -7,6 +7,8 @@
 | Docker + Compose | `brew install docker` | 24.0 | Postgres, Redis, Ollama, Synapse |
 | Ollama | `brew install ollama` | 0.1.0 | Local bge-m3 embeddings (native M2) |
 | Python | System or `brew install python@3.13` | 3.12+ | Services runtime |
+| Node.js | `brew install node` | 18+ | Meridian proxy runtime |
+| Meridian | `npm install -g @rynfar/meridian` | 1.29+ | Claude Max subscription proxy |
 | jira CLI | `brew install ankitpokhrel/jira-cli/jira` | 1.0+ | Jira ingestion |
 | glab | `brew install glab` | 1.0+ | GitLab ingestion |
 | git | System | 2.30+ | Repository cloning |
@@ -16,6 +18,8 @@
 docker --version              # Docker 24.x
 ollama --version             # 0.1.x
 python3 --version            # 3.12+
+node --version               # 18.x+
+meridian --version           # 1.29.x
 jira version                  # 1.x
 glab version                  # 1.x
 git --version                 # 2.30+
@@ -39,27 +43,30 @@ nano .env
 
 **Required in `.env`:**
 ```bash
+# Agent replies — Meridian proxy (Claude Max subscription, $0 marginal cost)
+# Auto-starts with dashboard. Install: npm install -g @rynfar/meridian
+MERIDIAN_URL=http://127.0.0.1:3456
+
+# Memory extraction — Gemini free tier (used by Mem0 only)
+GEMINI_API_KEY=AIza...
+
+# Fallback — Claude API (paid per-token, used only if MERIDIAN_URL not set)
+ANTHROPIC_API_KEY=sk-ant-...
+
 # Core services
-POSTGRES_DSN=postgresql://openkhang:password@localhost:5433/openkhang
-REDIS_URL=redis://localhost:6379
+OPENKHANG_DATABASE_URL=postgresql://openkhang:openkhang@localhost:5433/openkhang
+OPENKHANG_REDIS_URL=redis://localhost:6379
 OLLAMA_BASE_URL=http://localhost:11434
 
-# External APIs
-MEM0_API_KEY=sk_...          # Get from mem0.ai
-CLAUDE_API_KEY=sk-ant-...    # Get from console.anthropic.com
-JIRA_API_TOKEN=ATATT...      # Jira API token
-JIRA_INSTANCE_URL=https://jira.momo.dev
-GITLAB_TOKEN=glpat_...       # GitLab personal access token
-GITLAB_INSTANCE_URL=https://gitlab.momo.dev
-CONFLUENCE_TOKEN=ATCATT...   # Confluence API token
-CONFLUENCE_INSTANCE_URL=https://confluence.momo.dev
-GOOGLE_CHAT_API_KEY=...      # (used by bridge)
+# External APIs (work tool integrations)
+JIRA_API_TOKEN=ATATT...
+JIRA_SERVER=https://jira.example.com
+GITLAB_TOKEN=glpat_...
+GITLAB_HOST=https://gitlab.example.com
+CONFLUENCE_API_TOKEN=ATCATT...
+CONFLUENCE_DOMAIN=confluence.example.com
 MATRIX_HOMESERVER=http://localhost:8008
-
-# Application
-APP_ENV=development
-LOG_LEVEL=INFO
-DEBUG=false
+MATRIX_ACCESS_TOKEN=...
 ```
 
 ### 2. Run Onboarding
@@ -611,9 +618,10 @@ bash scripts/run-dashboard.sh
 ### Confidence Score Always 0
 
 **Check:**
-1. Is Claude API key valid? `echo $CLAUDE_API_KEY | head -c 20`
-2. Are API calls being made? Check logs for "Calling Claude"
-3. Test memory search: `services/.venv/bin/python3 scripts/test-memory.py`
+1. Is Meridian running? `curl http://127.0.0.1:3456/v1/models`
+2. If not using Meridian, is ANTHROPIC_API_KEY valid? `echo $ANTHROPIC_API_KEY | head -c 20`
+3. Are LLM calls being made? Check dashboard logs for "LLMClient: using Meridian"
+4. Test memory search: `services/.venv/bin/python3 scripts/test-memory.py`
 
 ## Production Deployment
 

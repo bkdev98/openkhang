@@ -43,17 +43,56 @@ STATIC_DIR = TEMPLATES_DIR / "static"
 _svc: DashboardServices | None = None
 
 
+async def _start_meridian() -> asyncio.subprocess.Process | None:
+    """Auto-start Meridian proxy if MERIDIAN_URL is configured and it's not already running."""
+    import shutil
+    meridian_url = os.getenv("MERIDIAN_URL", "")
+    if not meridian_url:
+        return None
+    # Check if Meridian is already running
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=2) as client:
+            resp = await client.get(f"{meridian_url.rstrip('/')}/v1/models")
+            if resp.status_code == 200:
+                logger.info("Meridian already running at %s", meridian_url)
+                return None
+    except Exception:
+        pass
+    # Start Meridian as subprocess
+    meridian_bin = shutil.which("meridian")
+    if not meridian_bin:
+        logger.warning("Meridian binary not found — install with: npm install -g @rynfar/meridian")
+        return None
+    proc = await asyncio.create_subprocess_exec(
+        meridian_bin,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    # Wait briefly for it to start
+    await asyncio.sleep(3)
+    if proc.returncode is not None:
+        logger.error("Meridian failed to start (exit %d)", proc.returncode)
+        return None
+    logger.info("Meridian auto-started (pid=%d) at %s", proc.pid, meridian_url)
+    return proc
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialise and tear down shared services."""
     global _svc
     _svc = DashboardServices()
+    meridian_proc = None
     relay_task = None
     agent_task = None
     telegram_task = None
     telegram_poll_task = None
     scheduler = None
     try:
+        # Start Meridian proxy before agent pipeline
+        meridian_proc = await _start_meridian()
+
         await _svc.connect()
         logger.info("Dashboard services connected")
         if _svc._pool:
@@ -83,11 +122,21 @@ async def lifespan(app: FastAPI):
             # Telegram bot (opt-in via TELEGRAM_BOT_TOKEN)
             try:
                 from services.telegram.bot import init_bot, set_pool, bot as tg_bot, dp as tg_dp
+                from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
                 result = init_bot()
                 if result:
                     set_pool(_svc._pool)
                     from services.telegram.bot import bot as tg_bot, dp as tg_dp
                     from services.telegram.notifier import run_notifier
+                    # Register bot menu commands at all_private_chats scope
+                    # (overrides any commands set by other tools sharing this bot token)
+                    ok_commands = [
+                        BotCommand(command="ok_status", description="Service health"),
+                        BotCommand(command="ok_events", description="Recent events"),
+                        BotCommand(command="ok_drafts", description="Pending drafts"),
+                        BotCommand(command="ok_autoreply", description="Toggle auto-reply"),
+                    ]
+                    await tg_bot.set_my_commands(ok_commands, scope=BotCommandScopeAllPrivateChats())
                     telegram_task = asyncio.create_task(run_notifier(_svc._pool))
                     # Start polling for commands (no webhook needed for local dev)
                     webhook_url = os.getenv("TELEGRAM_WEBHOOK_URL", "")
@@ -95,9 +144,18 @@ async def lifespan(app: FastAPI):
                         await tg_bot.set_webhook(webhook_url + "/telegram/webhook")
                         logger.info("Telegram webhook set: %s", webhook_url)
                     else:
-                        # Polling mode: process incoming commands via long-polling
+                        # Drop pending updates and close any stale server-side getUpdates session.
+                        # Without this, --reload restarts cause ConflictError for ~30s.
+                        await tg_bot.delete_webhook(drop_pending_updates=True)
+                        # Suppress aiogram retry warnings for transient Telegram conflicts
+                        logging.getLogger("aiogram.dispatcher").setLevel(logging.ERROR)
                         async def _poll_telegram():
-                            await tg_dp.start_polling(tg_bot, handle_signals=False)
+                            await tg_dp.start_polling(
+                                tg_bot,
+                                handle_signals=False,
+                                # Retry params for conflict after restart
+                                polling_timeout=10,
+                            )
                         telegram_poll_task = asyncio.create_task(_poll_telegram())
                         logger.info("Telegram bot polling started")
                     logger.info("Telegram bot + notifier started")
@@ -114,8 +172,18 @@ async def lifespan(app: FastAPI):
         telegram_task.cancel()
     if telegram_poll_task:
         telegram_poll_task.cancel()
+        # Close bot session so Telegram releases the getUpdates connection
+        try:
+            from services.telegram.bot import bot as tg_bot
+            if tg_bot:
+                await tg_bot.session.close()
+        except Exception:
+            pass
     if scheduler:
         await scheduler.stop()
+    if meridian_proc and meridian_proc.returncode is None:
+        meridian_proc.terminate()
+        logger.info("Meridian proxy stopped")
     if _svc:
         await _svc.close()
 
