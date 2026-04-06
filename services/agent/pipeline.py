@@ -162,29 +162,12 @@ class AgentPipeline:
             sender_known = bool(sender_context)
 
             # Step 3b: check if we have conversation history in this room
+            # Only reply in rooms where Khanh has participated before
             room_id = event.get("room_id", "")
-            has_history_in_room = True  # default to True for DMs
+            has_history_in_room = True  # default True for DMs / unknown
             if room_id and mode == "outward":
                 try:
-                    own_events = await self._memory.query_events(
-                        source="agent", event_type="agent.reply", limit=1,
-                    )
-                    # Check if any of our past replies were to this room
-                    has_history_in_room = any(
-                        e.get("payload", {}).get("room_id") == room_id
-                        for e in own_events
-                    )
-                    if not has_history_in_room:
-                        # Also check if Khanh's own messages exist in episodic log for this room
-                        room_events = await self._memory.query_events(
-                            source="chat", limit=50,
-                        )
-                        own_user = os.getenv("MATRIX_USER", "@claude:localhost")
-                        has_history_in_room = any(
-                            e.get("metadata", {}).get("room_id") == room_id
-                            and e.get("actor", "") == own_user
-                            for e in room_events
-                        )
+                    has_history_in_room = await self._check_room_history(room_id)
                 except Exception:
                     has_history_in_room = True  # fail-open
 
@@ -246,6 +229,25 @@ class AgentPipeline:
                 error=str(exc),
                 latency_ms=latency_ms,
             )
+
+    # ------------------------------------------------------------------
+    # Room history check
+    # ------------------------------------------------------------------
+
+    async def _check_room_history(self, room_id: str) -> bool:
+        """Check if we have any prior participation in this room.
+
+        Queries events table for agent replies or seeded history in this room.
+        Uses metadata->>'room_id' for fast lookup.
+        """
+        events = await self._memory.query_events(
+            source="agent", limit=200,
+        )
+        return any(
+            (e.get("metadata", {}).get("room_id") == room_id
+             or e.get("payload", {}).get("room_id") == room_id)
+            for e in events
+        )
 
     # ------------------------------------------------------------------
     # Routing logic
