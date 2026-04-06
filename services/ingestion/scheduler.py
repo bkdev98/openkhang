@@ -26,6 +26,7 @@ _DEFAULT_INTERVALS: dict[str, int] = {
     "jira": 5 * 60,        # 5 minutes
     "gitlab": 5 * 60,      # 5 minutes
     "confluence": 60 * 60, # 1 hour
+    "code": 10 * 60,       # 10 minutes (git-based incremental)
     "chat": 0,             # realtime via Redis — no polling
 }
 
@@ -69,6 +70,7 @@ class IngestionScheduler:
         from .gitlab import GitLabIngestor
         from .confluence import ConfluenceIngestor
         from .chat import ChatIngestor
+        from .code import CodeIngestor
 
         ingestors: dict[str, Any] = {
             "jira": JiraIngestor(self._memory),
@@ -76,14 +78,14 @@ class IngestionScheduler:
             "confluence": ConfluenceIngestor(self._memory),
             "chat": ChatIngestor(self._memory),
         }
+        code_ingestor = CodeIngestor(self._memory)
 
         for source, ingestor in ingestors.items():
             interval = self._intervals.get(source, 300)
             if source == "chat":
-                # Chat is driven by Redis events, not polling
                 task = asyncio.create_task(
                     self._redis_chat_listener(ingestor),
-                    name=f"ingest-chat-realtime",
+                    name="ingest-chat-realtime",
                 )
             else:
                 task = asyncio.create_task(
@@ -91,6 +93,13 @@ class IngestionScheduler:
                     name=f"ingest-{source}",
                 )
             self._tasks.append(task)
+
+        # Code sync via git diff (incremental, every 10 min)
+        code_interval = self._intervals.get("code", 600)
+        self._tasks.append(asyncio.create_task(
+            self._code_poll_loop(code_ingestor, code_interval),
+            name="ingest-code",
+        ))
 
         print(f"[scheduler] started {len(self._tasks)} ingestion tasks")
 
@@ -171,6 +180,24 @@ class IngestionScheduler:
                 break
 
         print(f"[scheduler] {source} poll loop stopped")
+
+    async def _code_poll_loop(self, code_ingestor: Any, interval: int) -> None:
+        """Poll git for code changes and re-index only modified files."""
+        print(f"[scheduler] code incremental sync started (interval={interval}s)")
+        while self._running:
+            try:
+                result = await code_ingestor.ingest_incremental()
+                if result.ingested > 0:
+                    print(f"[scheduler] code sync: {result.ingested} chunks indexed")
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                print(f"[scheduler] code sync error: {exc}")
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                break
+        print("[scheduler] code incremental sync stopped")
 
     async def _redis_chat_listener(self, chat_ingestor: Any) -> None:
         """Subscribe to Redis openkhang:events and trigger chat ingest on new messages.

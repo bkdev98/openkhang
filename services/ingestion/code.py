@@ -15,6 +15,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -59,20 +60,46 @@ class CodeIngestor(BaseIngestor):
             return self._chunk_kotlin(doc)
         return self._chunk_by_blocks(doc)
 
-    async def ingest_project(self, project_name: str) -> IngestResult:
-        """Index a single project."""
+    async def ingest_project(self, project_name: str, incremental: bool = False) -> IngestResult:
+        """Index a single project.
+
+        Args:
+            project_name: Key from config/projects.yaml.
+            incremental: If True, only index files changed since last git commit
+                         tracked in sync_state. Falls back to full if git fails.
+        """
         proj = self._config.get("projects", {}).get(project_name)
         if not proj:
             return IngestResult(source=f"code:{project_name}", total=0,
                                 ingested=0, skipped=0, errors=1)
 
-        docs = self._scan_project(project_name, proj)
+        if incremental:
+            docs = self._scan_git_changes(project_name, proj)
+            if docs is None:
+                # Git failed — fall back to full scan
+                docs = self._scan_project(project_name, proj)
+        else:
+            docs = self._scan_project(project_name, proj)
+
         return await self._ingest_docs(docs, project_name)
 
     async def ingest(self, since: datetime | None = None) -> IngestResult:
         """Index all configured projects."""
         docs = await self.fetch_new(since)
         return await self._ingest_docs(docs, "all")
+
+    async def ingest_incremental(self) -> IngestResult:
+        """Index only files changed since last sync across all projects."""
+        all_docs = []
+        for name, proj in self._config.get("projects", {}).items():
+            changed = self._scan_git_changes(name, proj)
+            if changed is not None:
+                all_docs.extend(changed)
+            # If git fails for a project, skip it (don't fall back to full)
+        if not all_docs:
+            return IngestResult(source="code:incremental", total=0,
+                                ingested=0, skipped=0, errors=0)
+        return await self._ingest_docs(all_docs, "incremental")
 
     async def _ingest_docs(self, docs: list[Document], label: str) -> IngestResult:
         total = 0
@@ -106,6 +133,107 @@ class CodeIngestor(BaseIngestor):
             skipped=skipped,
             errors=errors,
         )
+
+    # ── Git-based incremental scanning ────────────────────────────
+
+    def _scan_git_changes(self, name: str, proj: dict) -> list[Document] | None:
+        """Find files changed since last known commit using git.
+
+        Uses git log/diff to detect:
+        - Files modified since a stored commit hash
+        - Uncommitted changes (working tree)
+
+        Returns None if git is unavailable or project isn't a git repo.
+        """
+        base = Path(os.path.expanduser(proj.get("path", ""))).resolve()
+        if not (base / ".git").exists():
+            return None
+
+        extensions = set(proj.get("extensions", [".kt", ".ts", ".tsx"]))
+        include_paths = proj.get("include_paths", [])
+
+        # Get last synced commit from sync_state file
+        state_file = Path(__file__).parent.parent.parent / ".claude" / f"code-sync-{name}.txt"
+        last_commit = state_file.read_text().strip() if state_file.exists() else ""
+
+        try:
+            if last_commit:
+                # Files changed since last synced commit
+                result = subprocess.run(
+                    ["git", "diff", "--name-only", last_commit, "HEAD"],
+                    capture_output=True, text=True, timeout=15, cwd=str(base),
+                )
+                changed_files = [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
+            else:
+                # No previous sync — get files changed in last 20 commits
+                result = subprocess.run(
+                    ["git", "log", "--name-only", "--pretty=format:", "-20"],
+                    capture_output=True, text=True, timeout=15, cwd=str(base),
+                )
+                changed_files = list(set(f.strip() for f in result.stdout.strip().split("\n") if f.strip()))
+
+            # Also include uncommitted changes
+            result2 = subprocess.run(
+                ["git", "diff", "--name-only", "HEAD"],
+                capture_output=True, text=True, timeout=10, cwd=str(base),
+            )
+            uncommitted = [f.strip() for f in result2.stdout.strip().split("\n") if f.strip()]
+            changed_files = list(set(changed_files + uncommitted))
+
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return None
+
+        if not changed_files:
+            print(f"  [code] {name}: no changes since last sync")
+            return []
+
+        # Filter to relevant extensions and include_paths
+        docs = []
+        for rel_path in changed_files:
+            file_path = base / rel_path
+            if not file_path.exists() or not file_path.is_file():
+                continue
+            if file_path.suffix not in extensions:
+                continue
+            if include_paths:
+                if not any(rel_path.startswith(ip) for ip in include_paths):
+                    continue
+
+            try:
+                content = file_path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+
+            docs.append(Document(
+                source=f"code:{name}",
+                doc_id=f"{name}:{rel_path}",
+                title=rel_path,
+                content=content,
+                metadata={
+                    "project": name,
+                    "file_path": rel_path,
+                    "full_path": str(file_path),
+                    "extension": file_path.suffix,
+                    "language": proj.get("language", ""),
+                    "lines": content.count("\n") + 1,
+                    "incremental": True,
+                },
+            ))
+
+        # Save current HEAD commit for next incremental
+        try:
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=5, cwd=str(base),
+            )
+            if head.returncode == 0:
+                state_file.parent.mkdir(parents=True, exist_ok=True)
+                state_file.write_text(head.stdout.strip())
+        except Exception:
+            pass
+
+        print(f"  [code] {name}: {len(docs)} changed files (incremental)")
+        return docs
 
     # ── File scanning ───────────────────────────────────────────────
 
