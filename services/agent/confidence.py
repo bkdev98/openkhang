@@ -27,6 +27,7 @@ MODIFIER_LANGUAGE_MISMATCH = -0.10 # message language differs from persona prima
 MODIFIER_SOCIAL_INTENT = +0.25     # social messages (hi, thanks, emoji) are low-risk
 MODIFIER_GROUP_SOCIAL_SKIP = -0.90  # social/humor in group chats → skip (don't reply)
 MODIFIER_CAUTIOUS_SENDER = -0.30   # messages from managers/leads → always draft
+MODIFIER_NO_HISTORY = -0.90        # never chatted in this space before → skip
 
 
 class ConfidenceScorer:
@@ -47,6 +48,7 @@ class ConfidenceScorer:
         has_deadline_risk: bool = False,
         sender_known: bool = True,
         intent: str = "",
+        has_history_in_room: bool = True,
     ) -> float:
         """Compute final confidence score for a generated reply.
 
@@ -84,6 +86,10 @@ class ConfidenceScorer:
             # DM: social messages are safe to auto-reply
             if intent in ("social", "fyi"):
                 base += MODIFIER_SOCIAL_INTENT
+
+        # Penalty: never chatted in this space → skip entirely
+        if not has_history_in_room:
+            base += MODIFIER_NO_HISTORY
 
         # Penalty: sender title suggests manager/lead (from room display name)
         if self._is_cautious_sender(event):

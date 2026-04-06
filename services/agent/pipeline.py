@@ -161,6 +161,33 @@ class AgentPipeline:
 
             sender_known = bool(sender_context)
 
+            # Step 3b: check if we have conversation history in this room
+            room_id = event.get("room_id", "")
+            has_history_in_room = True  # default to True for DMs
+            if room_id and mode == "outward":
+                try:
+                    own_events = await self._memory.query_events(
+                        source="agent", event_type="agent.reply", limit=1,
+                    )
+                    # Check if any of our past replies were to this room
+                    has_history_in_room = any(
+                        e.get("payload", {}).get("room_id") == room_id
+                        for e in own_events
+                    )
+                    if not has_history_in_room:
+                        # Also check if Khanh's own messages exist in episodic log for this room
+                        room_events = await self._memory.query_events(
+                            source="chat", limit=50,
+                        )
+                        own_user = os.getenv("MATRIX_USER", "@claude:localhost")
+                        has_history_in_room = any(
+                            e.get("metadata", {}).get("room_id") == room_id
+                            and e.get("actor", "") == own_user
+                            for e in room_events
+                        )
+                except Exception:
+                    has_history_in_room = True  # fail-open
+
             # Step 4: build prompt
             messages = self._prompt_builder.build(
                 mode=mode,
@@ -185,6 +212,7 @@ class AgentPipeline:
                 has_deadline_risk=has_deadline_risk,
                 sender_known=sender_known,
                 intent=intent,
+                has_history_in_room=has_history_in_room,
             )
 
             latency_ms = int((time.monotonic() - t0) * 1000)
