@@ -98,11 +98,17 @@ async def _execute_send_action(
             "error": f"Could not find a DM room for '{target_name}'",
         }
 
-    # Extract the actual message to send from LLM reply
-    # The LLM should compose the message — extract it
+    # Extract the message to send — LLM should output just the message
     message_to_send = _extract_composed_message(llm_reply)
     if not message_to_send:
-        message_to_send = llm_reply  # Fallback: send the whole reply
+        # LLM likely returned just the message directly (ideal case)
+        # Strip any leading "Here's..." preamble
+        clean = llm_reply.strip()
+        # If it's short and doesn't look like an explanation, use it as-is
+        if len(clean) < 500 and "?" not in clean[-5:]:
+            message_to_send = clean
+        else:
+            return {"success": False, "error": "Could not extract message to send from LLM response"}
 
     # Send via Matrix
     try:
