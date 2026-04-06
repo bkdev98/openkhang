@@ -78,10 +78,17 @@ async def find_room_by_person(name: str) -> Optional[dict[str, str]]:
             continue
 
         chunks = members_data.get("chunk", [])
-        # Count non-bot members to detect DMs (2 members = DM)
-        real_members = [c for c in chunks if c.get("type") == "m.room.member"
-                        and "claude" not in c.get("state_key", "")]
-        is_dm = len(real_members) <= 2
+        # Count non-bot, non-bridge members to detect DMs
+        # DMs via mautrix bridge: @claude + @googlechat_xxx (2 members)
+        # Some bridge setups add bot users — filter them out
+        other_members = [
+            c for c in chunks
+            if c.get("type") == "m.room.member"
+            and c.get("state_key", "") != _OWN_USER
+            and "claude" not in c.get("state_key", "")
+            and c.get("content", {}).get("membership") == "join"
+        ]
+        is_dm = len(other_members) == 1
 
         for chunk in chunks:
             if chunk.get("type") != "m.room.member":
