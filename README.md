@@ -158,9 +158,7 @@ openkhang/
 │   ├── seed-code.py            # Index source code
 │   ├── seed-knowledge.py       # Seed Jira/GitLab/chat
 │   └── full-chat-seed.py       # Full Matrix history sync
-├── skills/            # Claude Code plugin skills (13)
-├── agents/            # Claude Code plugin agents (4)
-├── hooks/             # Claude Code plugin hooks (2)
+├── archive/           # Claude Code plugin (skills, agents, hooks) — reference only
 ├── docs/              # Project documentation (7 files)
 ├── plans/             # Implementation plans + reports
 └── docker-compose.yml # Infrastructure (Postgres, Redis)
