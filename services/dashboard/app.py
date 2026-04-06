@@ -38,6 +38,7 @@ async def lifespan(app: FastAPI):
     _svc = DashboardServices()
     relay_task = None
     agent_task = None
+    scheduler = None
     try:
         await _svc.connect()
         logger.info("Dashboard services connected")
@@ -48,6 +49,23 @@ async def lifespan(app: FastAPI):
             # Process new chat events through agent pipeline → draft replies
             agent_task = asyncio.create_task(run_agent_relay(_svc._pool))
             logger.info("Agent relay started")
+            # Start continuous knowledge ingestion (Jira 5min, GitLab 5min, Confluence 1hr)
+            try:
+                from services.memory.config import MemoryConfig
+                from services.memory.client import MemoryClient
+                from services.ingestion.scheduler import IngestionScheduler
+                from services.ingestion.sync_state import SyncStateStore
+
+                config = MemoryConfig.from_env()
+                memory = MemoryClient(config)
+                await memory.connect()
+                sync_store = SyncStateStore(config.database_url)
+                await sync_store.connect()
+                scheduler = IngestionScheduler(memory, sync_store)
+                await scheduler.start()
+                logger.info("Ingestion scheduler started (Jira/GitLab/Confluence)")
+            except Exception as exc:
+                logger.warning("Ingestion scheduler failed to start: %s", exc)
     except Exception as exc:
         logger.warning("Dashboard services connect failed (running degraded): %s", exc)
     yield
@@ -55,6 +73,8 @@ async def lifespan(app: FastAPI):
         relay_task.cancel()
     if agent_task:
         agent_task.cancel()
+    if scheduler:
+        await scheduler.stop()
     if _svc:
         await _svc.close()
 
