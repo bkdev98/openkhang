@@ -4,8 +4,7 @@
 
 | Tool | Install | Min Version | Purpose |
 |------|---------|-------------|---------|
-| Docker + Compose | `brew install docker` | 24.0 | Postgres, Redis, Ollama, Synapse |
-| Ollama | `brew install ollama` | 0.1.0 | Local bge-m3 embeddings (native M2) |
+| Docker + Compose | `brew install docker` | 24.0 | Postgres, Redis, Synapse |
 | Python | System or `brew install python@3.13` | 3.12+ | Services runtime |
 | Node.js | `brew install node` | 18+ | Meridian proxy runtime |
 | Meridian | `npm install -g @rynfar/meridian` | 1.29+ | Claude Max subscription proxy |
@@ -16,7 +15,6 @@
 **Verify installations:**
 ```bash
 docker --version              # Docker 24.x
-ollama --version             # 0.1.x
 python3 --version            # 3.12+
 node --version               # 18.x+
 meridian --version           # 1.29.x
@@ -56,7 +54,11 @@ ANTHROPIC_API_KEY=sk-ant-...
 # Core services
 OPENKHANG_DATABASE_URL=postgresql://openkhang:openkhang@localhost:5433/openkhang
 OPENKHANG_REDIS_URL=redis://localhost:6379
-OLLAMA_BASE_URL=http://localhost:11434
+
+# Embeddings — OpenRouter API (BAAI/bge-m3, OpenAI-compatible)
+EMBEDDING_API_KEY=sk-or-...
+EMBEDDING_API_URL=https://openrouter.ai/api/v1
+EMBEDDING_MODEL=BAAI/bge-m3
 
 # External APIs (work tool integrations)
 JIRA_API_TOKEN=ATATT...
@@ -76,7 +78,7 @@ MATRIX_ACCESS_TOKEN=...
 bash scripts/onboard.sh
 
 # This will:
-# 1. Start docker-compose (postgres, redis, ollama)
+# 1. Start docker-compose (postgres, redis)
 # 2. Initialize bridge (~/.mautrix-googlechat/docker-compose.yml)
 # 3. Create Python venv + install dependencies
 # 4. Initialize Postgres schema + Mem0
@@ -86,7 +88,7 @@ bash scripts/onboard.sh
 
 **Expected output:**
 ```
-✓ Docker services started (postgres:5433, redis:6379, ollama:11434)
+✓ Docker services started (postgres:5433, redis:6379)
 ✓ Bridge initialized (synapse:8008, bridge:8090)
 ✓ Python venv created
 ✓ Postgres schema initialized
@@ -141,19 +143,12 @@ You're now ready to test! Send a message in Google Chat and watch it appear in t
 ### Step 1: Docker Services
 
 ```bash
-# Start infrastructure (postgres, redis, ollama)
+# Start infrastructure (postgres, redis)
 docker-compose up -d
 
 # Verify services
 docker ps
-# postgres:5433, redis:6379, ollama:11434 should be running
-
-# Check Ollama has bge-m3 model
-curl http://localhost:11434/api/models
-# Response should include: "name": "bge-m3:latest"
-
-# If bge-m3 not present, pull it:
-ollama pull bge-m3
+# postgres:5433, redis:6379 should be running
 ```
 
 **Database Initialization:**
@@ -458,7 +453,7 @@ sudo systemctl start openkhang-ingestion
 
 **Via dashboard:**
 - Visit http://localhost:8000 → check "Health" panel
-- Shows: postgres, redis, ollama, matrix-listener, dashboard uptime
+- Shows: postgres, redis, embedding API, matrix-listener, dashboard uptime
 
 **Via CLI:**
 ```bash
@@ -468,8 +463,8 @@ psql -h localhost -p 5433 -U openkhang -c "SELECT 1;"
 # Redis
 redis-cli ping
 
-# Ollama
-curl http://localhost:11434/api/models
+# Embedding API
+curl -H "Authorization: Bearer $EMBEDDING_API_KEY" $EMBEDDING_API_URL/models
 
 # Matrix
 curl http://localhost:8008/_matrix/client/r0/sync
@@ -513,7 +508,6 @@ tail -f ~/.openkhang/logs/matrix-listener.log
 # Docker logs
 docker logs openkhang-postgres
 docker logs openkhang-redis
-docker logs openkhang-ollama
 
 # Bridge logs
 cd ~/.mautrix-googlechat
@@ -568,17 +562,15 @@ docker-compose restart postgres
 psql -h localhost -p 5433 -U openkhang -c "SELECT 1;"
 ```
 
-### Ollama Not Found
+### Embedding API Unreachable
 
 ```bash
-# Check if ollama is running
-curl http://localhost:11434/api/models
+# Verify EMBEDDING_API_KEY is set
+echo $EMBEDDING_API_KEY | head -c 10
 
-# Pull bge-m3 model
-ollama pull bge-m3
-
-# Verify
-ollama ls | grep bge-m3
+# Test OpenRouter connectivity
+curl -H "Authorization: Bearer $EMBEDDING_API_KEY" \
+  $EMBEDDING_API_URL/models
 ```
 
 ### Matrix/Bridge Not Responding

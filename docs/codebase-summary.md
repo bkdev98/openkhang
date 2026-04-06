@@ -100,7 +100,7 @@ openkhang/
 
 **Files (8 total, ~1100 LOC):**
 - `client.py` (220 LOC) — Public API: `MemoryClient` class with search, add_memory, get_entity
-- `config.py` (95 LOC) — Load `.env` vars, initialize Mem0/Ollama config
+- `config.py` (95 LOC) — Load `.env` vars, initialize Mem0/embedding config
 - `episodic.py` (180 LOC) — Append-only event log; `events` table interface
 - `working.py` (80 LOC) — In-memory TTL cache; `WorkingMemory` class
 - `schema.sql` (84 LOC) — Postgres schema: extensions, tables, indexes
@@ -283,7 +283,7 @@ Every action logged to `audit_log` table with: workflow_id, action_type, tier, p
 - `dashboard_services.py` (355 LOC) — High-level service logic
 - `inbox_relay.py` (95 LOC) — Consolidate mentions/assignments/flags
 - `agent_relay.py` (160 LOC) — Direct agent communication
-- `health_checker.py` (110 LOC) — Probe postgres, redis, ollama, matrix-listener
+- `health_checker.py` (110 LOC) — Probe postgres, redis, embedding API, matrix-listener
 - `twin_chat.py` (75 LOC) — Memory query interface
 - `templates/base.html` (120 LOC) — Base layout, nav, styling
 - `templates/index.html` (110 LOC) — Home: feed, drafts, health
@@ -397,7 +397,7 @@ CREATE TABLE mem0_memories (
 | Confluence | REST API | Ingest pages, update docs |
 | Meridian | @rynfar/meridian (localhost:3456) | Claude Max subscription proxy for agent replies |
 | Claude API | anthropic Python SDK (fallback) | Generate responses if Meridian unavailable |
-| Ollama | bge-m3 model (native M2) | Embeddings (1024-dim) |
+| OpenRouter API | BAAI/bge-m3 (remote) | Embeddings (1024-dim) |
 | Postgres | psycopg + pgvector | Memory, events, drafts, workflows |
 | Redis | aioredis | Pub/sub event bus, session store |
 | Matrix | Matrix Client API | Send messages to rooms |
@@ -481,7 +481,7 @@ Ingestion     Agent Pipeline  Workflow Engine  Dashboard    Memory Service
                     ├─────────────┤
                     │ Postgres    │
                     │ Redis       │
-                    │ Ollama      │
+                    │ OpenRouter  │
                     │ Synapse     │
                     └─────────────┘
 ```
@@ -496,7 +496,7 @@ Ingestion     Agent Pipeline  Workflow Engine  Dashboard    Memory Service
 | `config/projects.yaml` | Code projects to index (3 repos) |
 | `config/style_examples.jsonl` | Chat examples for voice tuning |
 | `config/workflows/*.yaml` | State machine definitions |
-| `docker-compose.yml` | Infrastructure services (postgres, redis, ollama) |
+| `docker-compose.yml` | Infrastructure services (postgres, redis) |
 
 ## Development Workflow
 

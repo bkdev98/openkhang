@@ -41,7 +41,7 @@ Agent replies use **Meridian** (Claude Max subscription proxy, $0 marginal cost)
 ### Memory System
 
 Three-layer memory powered by Mem0 + Gemini 2.5 Flash:
-- **Semantic**: Vector search (pgvector + bge-m3 via Ollama) for knowledge retrieval
+- **Semantic**: Vector search (pgvector + bge-m3 via OpenRouter API) for knowledge retrieval
 - **Episodic**: Append-only Postgres event log (chat, code, Jira, agent actions)
 - **Working**: In-memory session context with 30-min TTL
 
@@ -75,7 +75,6 @@ bash scripts/run-dashboard.sh
 | Tool | Install | Purpose |
 |------|---------|---------|
 | Docker | `brew install docker` | Postgres, Redis, Synapse, mautrix bridge |
-| Ollama | `brew install ollama` | Local bge-m3 embeddings (native Apple Silicon) |
 | Python 3.12+ | System or brew | All services run in `services/.venv` |
 | Node.js 18+ | `brew install node` | Meridian proxy runtime |
 | Meridian | `npm install -g @rynfar/meridian` | Claude Max subscription proxy |
@@ -89,7 +88,7 @@ bash scripts/run-dashboard.sh
 | Meridian | 3456 | Claude Max subscription proxy (auto-started with dashboard) |
 | Postgres + pgvector | 5433 | Memory, events, drafts, workflows |
 | Redis | 6379 | Event bus (pub/sub) |
-| Ollama (native) | 11434 | bge-m3 embeddings (1024-dim, Vietnamese+English) |
+| OpenRouter API | — | bge-m3 embeddings via BAAI/bge-m3 (OpenAI-compatible, remote) |
 | Synapse | 8008 | Matrix homeserver for Google Chat bridge |
 | Dashboard | 8000 | Web UI: feed, drafts, health, twin chat |
 
@@ -107,6 +106,11 @@ GEMINI_API_KEY=AIza...
 
 # Fallback only — Claude API (paid per-token, used if MERIDIAN_URL is not set)
 ANTHROPIC_API_KEY=sk-ant-...
+
+# Embeddings — OpenRouter API (OpenAI-compatible, BAAI/bge-m3)
+EMBEDDING_API_KEY=sk-or-...
+EMBEDDING_API_URL=https://openrouter.ai/api/v1   # default
+EMBEDDING_MODEL=BAAI/bge-m3                       # default
 ```
 
 ### Persona (`config/persona.yaml`)
@@ -152,7 +156,7 @@ openkhang/
 ├── scripts/
 │   ├── onboard.sh              # First-time setup
 │   ├── setup-bridge.sh         # Synapse + mautrix bridge
-│   ├── setup-memory.sh         # Postgres + Redis + Ollama
+│   ├── setup-memory.sh         # Postgres + Redis
 │   ├── run-dashboard.sh        # Start web UI
 │   ├── matrix-listener.py      # Real-time chat listener
 │   ├── seed-code.py            # Index source code

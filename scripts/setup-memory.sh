@@ -2,11 +2,11 @@
 # setup-memory.sh — Bootstrap the openkhang memory layer
 #
 # Steps:
-#   1. Start postgres, redis, ollama via docker compose
+#   1. Start postgres, redis via docker compose
 #   2. Wait for postgres to be healthy
 #   3. Apply schema.sql (idempotent — uses IF NOT EXISTS)
-#   4. Pull bge-m3 embedding model into Ollama
-#   5. Verify Ollama embedding endpoint responds
+#   4. Verify embedding API key is set
+#   5. Test embedding endpoint responds
 #   6. Print next-steps summary
 #
 # Usage: bash scripts/setup-memory.sh
@@ -22,8 +22,6 @@ PG_HOST="localhost"
 PG_PORT="5433"
 PG_USER="openkhang"
 PG_DB="openkhang"
-OLLAMA_URL="http://localhost:11434"
-EMBEDDING_MODEL="bge-m3"
 
 # ── Colour helpers ────────────────────────────────────────────────────
 green()  { printf '\033[0;32m%s\033[0m\n' "$*"; }
@@ -76,9 +74,6 @@ green "Postgres is ready"
 
 # ── Apply schema ─────────────────────────────────────────────────────
 step "Applying schema.sql"
-# Schema is mounted as an init script so it runs automatically on first
-# container start. We also apply it explicitly here to handle the case
-# where the volume already existed without the schema.
 docker compose exec -T postgres psql \
   -U "$PG_USER" \
   -d "$PG_DB" \
@@ -86,52 +81,40 @@ docker compose exec -T postgres psql \
   && green "Schema applied" \
   || yellow "Schema apply returned non-zero (may already be initialised — check above output)"
 
-# ── Start Ollama (native macOS) ──────────────────────────────────────
-step "Checking Ollama (native)"
+# ── Check embedding API key ──────────────────────────────────────────
+step "Checking embedding API configuration"
 
-if ! command -v ollama &>/dev/null; then
-  red "ollama not found. Install with: brew install ollama"
+# Load .env if present
+if [[ -f .env ]]; then
+  set -a; source .env; set +a
+fi
+
+EMBEDDING_API_KEY="${EMBEDDING_API_KEY:-}"
+EMBEDDING_API_URL="${EMBEDDING_API_URL:-https://openrouter.ai/api/v1}"
+EMBEDDING_MODEL="${EMBEDDING_MODEL:-BAAI/bge-m3}"
+
+if [[ -z "$EMBEDDING_API_KEY" ]]; then
+  red "EMBEDDING_API_KEY is not set in .env"
+  info "Get a key at https://openrouter.ai/keys and add to .env:"
+  info "  EMBEDDING_API_KEY=sk-or-..."
   exit 1
 fi
-
-# Start Ollama if not already running
-if ! curl -sf "$OLLAMA_URL/api/tags" &>/dev/null; then
-  info "Starting Ollama in background..."
-  ollama serve &>/dev/null &
-  OLLAMA_RETRIES=15
-  until curl -sf "$OLLAMA_URL/api/tags" &>/dev/null; do
-    OLLAMA_RETRIES=$((OLLAMA_RETRIES - 1))
-    if [[ $OLLAMA_RETRIES -le 0 ]]; then
-      red "Ollama did not start at $OLLAMA_URL after 15 attempts"
-      red "Try manually: ollama serve"
-      exit 1
-    fi
-    printf '.'
-    sleep 2
-  done
-  echo ""
-fi
-green "Ollama is running"
-
-# Pull embedding model
-step "Pulling $EMBEDDING_MODEL embedding model"
-info "This may take several minutes on first run (~600 MB download)"
-ollama pull "$EMBEDDING_MODEL"
-green "Model $EMBEDDING_MODEL pulled"
+green "EMBEDDING_API_KEY is set"
 
 # ── Verify embedding endpoint ────────────────────────────────────────
-step "Verifying embedding endpoint"
-EMBED_RESPONSE=$(curl -sf "$OLLAMA_URL/api/embed" \
+step "Verifying embedding endpoint ($EMBEDDING_MODEL via $EMBEDDING_API_URL)"
+EMBED_RESPONSE=$(curl -sf "$EMBEDDING_API_URL/embeddings" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $EMBEDDING_API_KEY" \
   -d "{\"model\": \"$EMBEDDING_MODEL\", \"input\": \"hello world\"}" \
   || true)
 
-if echo "$EMBED_RESPONSE" | grep -q '"embeddings"'; then
+if echo "$EMBED_RESPONSE" | grep -q '"embedding"'; then
   green "Embedding endpoint OK — $EMBEDDING_MODEL is responding"
 else
   yellow "Embedding test returned unexpected response:"
   echo "$EMBED_RESPONSE"
-  yellow "Services are up but you may need to retry the embedding check manually."
+  yellow "API key and URL are set but the endpoint may need verification."
 fi
 
 # ── Install Python deps ──────────────────────────────────────────────
@@ -153,10 +136,10 @@ cat <<EOF
 Services running:
   Postgres  → localhost:$PG_PORT  (db: $PG_DB, user: $PG_USER)
   Redis     → localhost:6379
-  Ollama    → $OLLAMA_URL  (model: $EMBEDDING_MODEL)
+  Embeddings → $EMBEDDING_API_URL  (model: $EMBEDDING_MODEL)
 
 Next steps:
-  1. Add ANTHROPIC_API_KEY to your .env file (required for Mem0 LLM extraction)
+  1. Add GEMINI_API_KEY to .env (required for Mem0 memory extraction)
   2. Ingest existing chat history:
        python3 services/memory/ingest-chat-history.py
   3. Run a quick smoke test:

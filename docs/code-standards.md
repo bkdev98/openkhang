@@ -89,7 +89,7 @@ openkhang/
 │   ├── gitlab-knowledge/
 │   ├── confluence-search/
 │   └── openkhang-status/
-├── docker-compose.yml         # Postgres, Redis, Ollama
+├── docker-compose.yml         # Postgres, Redis
 ├── .env.example               # Configuration template
 ├── .gitignore
 └── README.md
@@ -309,7 +309,8 @@ from . import utils  # Relative import within package
 # Core services
 POSTGRES_DSN=postgresql://openkhang:password@localhost:5433/openkhang
 REDIS_URL=redis://localhost:6379
-OLLAMA_BASE_URL=http://localhost:11434
+EMBEDDING_API_KEY=sk-or-...
+EMBEDDING_API_URL=https://openrouter.ai/api/v1
 
 # External APIs
 MEM0_API_KEY=sk_...

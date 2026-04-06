@@ -1,4 +1,4 @@
-"""Health checker: probes Docker containers, Ollama, and Postgres connectivity."""
+"""Health checker: probes Docker containers, embedding API, and Postgres connectivity."""
 
 from __future__ import annotations
 
@@ -48,25 +48,50 @@ async def check_docker_containers() -> list[dict[str, Any]]:
     return services
 
 
-async def check_ollama() -> dict[str, Any]:
-    """Probe Ollama /api/tags endpoint."""
-    try:
-        resp = await asyncio.to_thread(
-            urllib.request.urlopen,
-            "http://localhost:11434/api/tags",
-            timeout=3,
-        )
-        data = json.loads(resp.read())
-        model_count = len(data.get("models", []))
+async def check_embedding_api() -> dict[str, Any]:
+    """Probe embedding API by sending a single-word embed request."""
+    import os
+
+    api_url = os.getenv("EMBEDDING_API_URL", "https://openrouter.ai/api/v1")
+    api_key = os.getenv("EMBEDDING_API_KEY", "")
+    model = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
+
+    if not api_key:
         return {
-            "name": "ollama",
-            "status": "ok",
-            "detail": f"{model_count} model(s) loaded",
+            "name": "embeddings",
+            "status": "error",
+            "detail": "EMBEDDING_API_KEY not set",
+            "type": "service",
+        }
+    try:
+        payload = json.dumps({"model": model, "input": "health"}).encode()
+        req = urllib.request.Request(
+            f"{api_url}/embeddings",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        resp = await asyncio.to_thread(urllib.request.urlopen, req, timeout=5)
+        data = json.loads(resp.read())
+        if data.get("data"):
+            dims = len(data["data"][0].get("embedding", []))
+            return {
+                "name": "embeddings",
+                "status": "ok",
+                "detail": f"{model} ({dims}-dim)",
+                "type": "service",
+            }
+        return {
+            "name": "embeddings",
+            "status": "error",
+            "detail": "Unexpected response format",
             "type": "service",
         }
     except Exception as exc:
         return {
-            "name": "ollama",
+            "name": "embeddings",
             "status": "error",
             "detail": str(exc),
             "type": "service",
@@ -83,14 +108,14 @@ async def check_postgres(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 async def get_all_health(pool: asyncpg.Pool | None) -> list[dict[str, Any]]:
-    """Aggregate health checks: Docker + Ollama + Postgres (concurrent)."""
+    """Aggregate health checks: Docker + Embedding API + Postgres (concurrent)."""
     docker_task = asyncio.create_task(check_docker_containers())
-    ollama_task = asyncio.create_task(check_ollama())
+    embedding_task = asyncio.create_task(check_embedding_api())
 
-    docker_results, ollama_result = await asyncio.gather(docker_task, ollama_task)
+    docker_results, embedding_result = await asyncio.gather(docker_task, embedding_task)
 
     services: list[dict[str, Any]] = list(docker_results)
-    services.append(ollama_result)
+    services.append(embedding_result)
 
     if pool is not None:
         pg_result = await check_postgres(pool)

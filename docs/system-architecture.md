@@ -65,9 +65,9 @@
 │  │                  │    │ • REST APIs      │  │ • rank_drafts() │ │
 │  │ Config:          │    │ • Local git clone│  │ • send_reply()  │ │
 │  │ • vector_dim=1024│    │ • Postgres       │  │                 │ │
-│  │ • model=bge-m3   │    │ • pgvector       │  │ Config:         │ │
-│  │ • embedding_dim: │    │                  │  │ • persona.yaml  │ │
-│  │   bge-m3/ollama  │    │ Config:          │  │ • confidence_*. │ │
+│  │ • model=BAAI/    │    │ • pgvector       │  │ Config:         │ │
+│  │   bge-m3         │    │                  │  │ • persona.yaml  │ │
+│  │ • OpenRouter API │    │ Config:          │  │ • confidence_*. │ │
 │  │                  │    │ • projects.yaml  │  │   yaml          │ │
 │  │ Port: Mem0 API   │    │ • API keys (.env)│  │                 │ │
 │  │ (local)          │    │                  │  │ Port: Redis     │ │
@@ -106,7 +106,7 @@
 │  │ • POST /drafts/{id}/approve → approve single draft            │ │
 │  │ • POST /drafts/{id}/edit → edit and re-send draft             │ │
 │  │ • GET /events (SSE) → real-time activity feed                │ │
-│  │ • GET /health → service health (postgres, redis, ollama)      │ │
+│  │ • GET /health → service health (postgres, redis, embedding)   │ │
 │  │ • POST /twin-chat → query the agent about memories           │ │
 │  │                                                                │ │
 │  │ Real-time: Server-Sent Events (SSE) for activity feed updates │ │
@@ -122,14 +122,14 @@
          │                  ┌───────┴──────────┘
          │                  │
 ┌────────▼──────┬───────────▼────────┬──────────────────────┐
-│   Postgres    │      Redis         │     Ollama           │
-│   5433        │      6379          │     11434            │
+│   Postgres    │      Redis         │  OpenRouter API      │
+│   5433        │      6379          │  (remote)            │
 ├───────────────┼────────────────────┼──────────────────────┤
-│ • pgvector    │ • Pub/sub (message │ • bge-m3 embeddings │
-│ • events      │   routing)         │ • Model: 1024-dim   │
-│ • draft_      │ • Session store    │ • Native ARM64 (M2) │
-│   replies     │   (TTL 30-min)     │ • Runs native       │
-│ • sync_state  │ • Job queues       │ • ~2GB RAM          │
+│ • pgvector    │ • Pub/sub (message │ • BAAI/bge-m3        │
+│ • events      │   routing)         │ • 1024-dim vectors  │
+│ • draft_      │ • Session store    │ • OpenAI-compatible │
+│   replies     │   (TTL 30-min)     │ • EMBEDDING_API_KEY │
+│ • sync_state  │ • Job queues       │   required          │
 │ • workflow_   │                    │                     │
 │   instances   │                    │                     │
 │ • audit_log   │                    │                     │
@@ -146,7 +146,7 @@
 - `client.py` — Mem0 wrapper; high-level search/add_memory API
 - `episodic.py` — Raw event log; appends immutable records
 - `working.py` — In-memory TTL cache for session state
-- `config.py` — Load config from .env (API keys, Ollama endpoint)
+- `config.py` — Load config from .env (API keys, embedding endpoint)
 - `schema.sql` — Postgres schema (extensions, tables, indexes)
 
 **Database Tables:**
@@ -177,7 +177,9 @@ session = client.working_memory.get_session(user_id)
 **Config (from `.env`):**
 - `MEM0_API_KEY` — Mem0 API token
 - `POSTGRES_DSN` — Connection string
-- `OLLAMA_BASE_URL` — Embedding endpoint
+- `EMBEDDING_API_KEY` — OpenRouter API key for embeddings
+- `EMBEDDING_API_URL` — Embedding endpoint (default: https://openrouter.ai/api/v1)
+- `EMBEDDING_MODEL` — Model name (default: BAAI/bge-m3)
 - `VECTOR_DIM` — Default 1024 (bge-m3)
 
 ### 2. Ingestion Layer (`services/ingestion/`)
@@ -379,7 +381,7 @@ VALUES (uuid, 'create_jira', 2, {...}, {...}, 'khanh', now());
 - `dashboard_services.py` — High-level service logic (fetch drafts, check health)
 - `inbox_relay.py` — Consolidate mentions, assignments, flags from all sources
 - `agent_relay.py` — Direct communication with agent (send instruction, get response)
-- `health_checker.py` — Probe postgres, redis, ollama, matrix-listener
+- `health_checker.py` — Probe postgres, redis, embedding API, matrix-listener
 - `twin_chat.py` — Interface with agent for memory queries
 - `templates/` — Jinja2 HTML + HTMX + TailwindCSS
 
@@ -394,7 +396,7 @@ VALUES (uuid, 'create_jira', 2, {...}, {...}, 'khanh', now());
 | POST | `/drafts/{id}/edit` | Edit text, save modified version |
 | GET | `/events` (SSE) | Stream activity feed updates (real-time) |
 | POST | `/twin-chat` | Query agent: "Summarize discussion about X" |
-| GET | `/health` | Service health: postgres, redis, ollama, matrix-listener |
+| GET | `/health` | Service health: postgres, redis, embedding API, matrix-listener |
 
 **Real-Time Updates (SSE):**
 ```python
@@ -433,12 +435,12 @@ async def check_health():
     except Exception as e:
         health['redis'] = f'error: {str(e)}'
     
-    # Ollama
+    # Embedding API (OpenRouter)
     try:
-        response = httpx.get("http://localhost:11434/api/models")
-        health['ollama'] = 'ok' if response.status_code == 200 else 'error'
+        response = httpx.get(f"{embedding_api_url}/models", headers={"Authorization": f"Bearer {embedding_api_key}"})
+        health['embedding'] = 'ok' if response.status_code == 200 else 'error'
     except:
-        health['ollama'] = 'unreachable'
+        health['embedding'] = 'unreachable'
     
     return health
 ```
@@ -541,7 +543,7 @@ async def check_health():
 **Infrastructure:**
 - **Postgres** (port 5433) — pgvector extension; episodic store + drafts
 - **Redis** (port 6379) — event bus (pub/sub); session store
-- **Ollama** (port 11434) — local bge-m3 embeddings (native M2 ARM64)
+- **OpenRouter API** (remote) — BAAI/bge-m3 embeddings (OpenAI-compatible)
 - **Synapse** (port 8008) — Matrix homeserver
 - **mautrix-googlechat** (port 8090) — bridge (separate compose)
 - **Dashboard** (port 8000) — FastAPI, HTMX, SSE
@@ -562,7 +564,7 @@ async def check_health():
   ├── workflow/                  # State machines
   └── dashboard/                 # FastAPI web UI
 
-./docker-compose.yml            # Postgres + Redis + Ollama
+./docker-compose.yml            # Postgres + Redis
 ```
 
 ## Security Boundaries
@@ -574,7 +576,7 @@ async def check_health():
 | Synapse ↔ matrix-listener | Sync stream | No auth (localhost only) |
 | Services ↔ Postgres | Database | Localhost-only; no public exposure |
 | Services ↔ Redis | Event bus | Localhost-only; no auth (internal) |
-| Services ↔ Ollama | Embedding | Localhost-only; no auth |
+| Services ↔ OpenRouter API | Embedding | External HTTPS; API key in .env |
 | Dashboard ↔ User | Web browser | Future: session token auth |
 | Meridian proxy | Local (localhost:3456) | Auto-started; routes to Claude Max subscription |
 | Claude API calls (fallback) | External | API key in .env; sent only context, no raw chat |

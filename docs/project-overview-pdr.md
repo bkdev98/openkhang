@@ -22,7 +22,7 @@ openkhang is an AI digital twin that acts as an autonomous agent for Khanh Bui (
 - Dashboard at localhost:8000 shows activity feed, draft queue, task summaries
 - User reviews drafts, approves/rejects/edits before send
 - Twin Chat feature: conversation with the agent for queries ("What did we discuss about transaction history?")
-- Service health monitoring: postgres, redis, ollama, matrix-listener, dashboard
+- Service health monitoring: postgres, redis, embedding API, matrix-listener, dashboard
 - Inbox relay: consolidates mentions, assignments, and flagged items
 - Agent relay: direct instructions to agent ("Reply to #eng-chat message 123 about the deployment issue")
 
@@ -30,7 +30,7 @@ openkhang is an AI digital twin that acts as an autonomous agent for Khanh Bui (
 
 ### Layer 1: Semantic (Vector Search)
 - Storage: pgvector extension on Postgres 5433
-- Embeddings: bge-m3 model via Ollama (1024-dim, Vietnamese+English)
+- Embeddings: BAAI/bge-m3 via OpenRouter API (1024-dim, Vietnamese+English)
 - Index: HNSW vector index managed by pgvector
 - Use: "What does Khanh know about transaction history?"
 
@@ -57,7 +57,7 @@ openkhang is an AI digital twin that acts as an autonomous agent for Khanh Bui (
 
 All ingested data flows through:
 1. **Chunker** — splits by semantic boundaries
-2. **Embedder** — vectorizes via bge-m3 (Ollama)
+2. **Embedder** — vectorizes via BAAI/bge-m3 (OpenRouter API)
 3. **Mem0 Client** — stores in pgvector with metadata
 4. **Episodic Store** — appends raw event to `events` table
 
@@ -111,7 +111,7 @@ Example: `chat-to-jira.yaml` routes certain chat patterns to Jira ticket creatio
 ### Home
 - Real-time activity feed (last 50 events)
 - Draft queue (pending review, count by status)
-- Service health: postgres, redis, ollama, matrix-listener, dashboard uptime
+- Service health: postgres, redis, embedding API, matrix-listener, dashboard uptime
 
 ### Drafts
 - All pending/reviewed drafts with evidence panel
@@ -153,19 +153,19 @@ Example: `chat-to-jira.yaml` routes certain chat patterns to Jira ticket creatio
 | Safety (never violate never_do rules) | 100% | Enforced in prompt; auditable via audit_log |
 | Uptime (dashboard + services) | 99.5% | Docker compose with health checks |
 | Memory efficiency | <2GB heap | Single Python process for dashboard; services share venv |
-| Cost (embeddings + LLM) | <$10/day | Ollama local, Claude API for agent inference |
+| Cost (embeddings + LLM) | <$10/day | OpenRouter API for embeddings, Claude API for agent inference |
 
 ## Technology Stack
 
 | Component | Tech | Details |
 |-----------|------|---------|
-| Memory | pgvector + Mem0 + Ollama | Postgres 5433, bge-m3 embeddings, episodic event log |
+| Memory | pgvector + Mem0 + OpenRouter API | Postgres 5433, BAAI/bge-m3 embeddings, episodic event log |
 | LLM | Claude API | claude-opus for outward (quality), claude-sonnet for memory extraction |
 | Bridge | Synapse + mautrix-googlechat | Matrix protocol; docker compose in ~/.mautrix-googlechat/ |
 | Dashboard | FastAPI + HTMX | Python async; TailwindCSS styling; SSE for real-time updates |
 | Event Bus | Redis | Pub/sub between services; 6379 default |
 | Language | Python 3.13 | Async/await for I/O; type hints; services/.venv |
-| Infrastructure | Docker Compose | Postgres, Redis, Ollama services |
+| Infrastructure | Docker Compose | Postgres, Redis services |
 
 ## Deployment Architecture
 
@@ -198,10 +198,10 @@ Example: `chat-to-jira.yaml` routes certain chat patterns to Jira ticket creatio
 └────┬────┴────┬────┴────┬─────┴────┬────┘
      │         │         │          │
      └────┬────┴────┬────┴────┬─────┘
-          │ Postgres (5433)   │
-          │ Redis (6379)      │
-          │ Ollama (11434)    │
-          └────────────────────┘
+          │ Postgres (5433)       │
+          │ Redis (6379)          │
+          │ OpenRouter API (remote)│
+          └────────────────────────┘
           
           ▼
      Dashboard (FastAPI:8000)
@@ -211,7 +211,7 @@ Example: `chat-to-jira.yaml` routes certain chat patterns to Jira ticket creatio
 ## Security & Privacy
 
 ### Data Handling
-- All data stays on-premise (Postgres, Redis, Ollama)
+- All data stays on-premise (Postgres, Redis); embeddings sent to OpenRouter API (no raw chat data)
 - Claude API calls include only generated context, not raw chat messages
 - Ephemeral working memory (30-min TTL) — no persistent session logs
 - Audit log tracks all auto-replies and approvals

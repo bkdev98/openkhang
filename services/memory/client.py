@@ -26,7 +26,7 @@ class MemoryClient:
     """Unified memory client wrapping Mem0 + episodic store.
 
     Three layers:
-    - Semantic: Mem0 with pgvector backend + Ollama bge-m3 embeddings
+    - Semantic: Mem0 with pgvector backend + bge-m3 embeddings (OpenRouter API)
     - Episodic: Postgres append-only event log (raw events, immutable)
     - Working:  In-memory session context with 30-min TTL expiry
 

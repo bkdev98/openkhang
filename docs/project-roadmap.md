@@ -30,7 +30,7 @@
 **Deliverables:**
 - `services/memory/` (client.py, episodic.py, working.py, config.py)
 - `services/memory/schema.sql` (full Postgres schema)
-- pgvector embeddings: bge-m3 (1024-dim, Vietnamese+English)
+- pgvector embeddings: BAAI/bge-m3 via OpenRouter API (1024-dim, Vietnamese+English)
 
 **Outcome:** Three-layer memory system functional and tested.
 
@@ -121,7 +121,7 @@
 - [x] Home page (activity feed, draft count, health status)
 - [x] Drafts page (review queue, approve/reject/edit)
 - [x] Real-time updates (Server-Sent Events)
-- [x] Service health monitoring (postgres, redis, ollama, matrix-listener)
+- [x] Service health monitoring (postgres, redis, embedding API, matrix-listener)
 - [x] Twin Chat interface (query agent about memories)
 - [x] Inbox relay (consolidate mentions, assignments, flags)
 - [x] Agent relay (direct instructions to agent)

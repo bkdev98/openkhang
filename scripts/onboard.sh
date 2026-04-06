@@ -2,13 +2,13 @@
 # onboard.sh — First-time setup for openkhang digital twin
 #
 # Steps:
-#   1. Check prerequisites (Docker, CLIs, Ollama)
+#   1. Check prerequisites (Docker, Python)
 #   2. Set up .env if missing
-#   3. Start infrastructure (Postgres, Redis)
-#   4. Set up memory layer (schema, bge-m3)
-#   5. Start bridge if not running
-#   6. Run initial chat history ingestion
-#   7. Start dashboard
+#   3. Set up Python venv + deps
+#   4. Start infrastructure (Postgres, Redis)
+#   5. Verify embedding API key
+#   6. Check Matrix bridge
+#   7. Initial data check
 #   8. Print summary
 #
 # Usage: bash scripts/onboard.sh
@@ -33,7 +33,7 @@ fail()  { printf '  %b[fail]%b %s\n' "$RED" "$NC" "$*"; }
 step "Checking prerequisites"
 
 MISSING=0
-for cmd in docker ollama python3; do
+for cmd in docker python3; do
     if command -v "$cmd" &>/dev/null; then
         ok "$cmd found"
     else
@@ -63,7 +63,8 @@ if [[ ! -f .env ]]; then
     if [[ -f .env.example ]]; then
         cp .env.example .env
         warn ".env created from .env.example — edit it with your API keys"
-        info "At minimum, set ANTHROPIC_API_KEY"
+        info "Required: EMBEDDING_API_KEY (get at https://openrouter.ai/keys)"
+        info "Required: GEMINI_API_KEY (for Mem0 memory extraction)"
         read -rp "  Press Enter to continue after editing .env (or Ctrl+C to abort)... "
     else
         fail ".env.example not found"
@@ -71,11 +72,22 @@ if [[ ! -f .env ]]; then
     fi
 fi
 
-# Check critical env var
-if grep -q '^ANTHROPIC_API_KEY=sk-ant-' .env 2>/dev/null; then
-    ok "ANTHROPIC_API_KEY is set"
+# Load .env for checks
+set -a; source .env 2>/dev/null || true; set +a
+
+# Check critical env vars
+if [[ -n "${EMBEDDING_API_KEY:-}" ]]; then
+    ok "EMBEDDING_API_KEY is set"
 else
-    warn "ANTHROPIC_API_KEY may not be set — Mem0 memory extraction will fail"
+    fail "EMBEDDING_API_KEY is not set — embeddings will not work"
+    info "Get a key at https://openrouter.ai/keys and add to .env"
+    exit 1
+fi
+
+if [[ -n "${GEMINI_API_KEY:-}" ]]; then
+    ok "GEMINI_API_KEY is set"
+else
+    warn "GEMINI_API_KEY not set — Mem0 memory extraction will fail"
 fi
 
 # ── 3. Python venv ───────────────────────────────────────────────
@@ -113,21 +125,25 @@ docker compose exec -T postgres psql -U openkhang -d openkhang \
     -f /docker-entrypoint-initdb.d/01-schema.sql &>/dev/null
 ok "Schema applied"
 
-# ── 5. Ollama + bge-m3 ──────────────────────────────────────────
-step "Setting up Ollama embeddings"
+# ── 5. Verify embedding API ─────────────────────────────────────
+step "Verifying embedding API"
 
-if ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
-    info "Starting Ollama..."
-    ollama serve &>/dev/null &
-    sleep 5
-fi
+EMBEDDING_API_URL="${EMBEDDING_API_URL:-https://openrouter.ai/api/v1}"
+EMBEDDING_MODEL="${EMBEDDING_MODEL:-BAAI/bge-m3}"
 
-if ollama list 2>/dev/null | grep -q "bge-m3"; then
-    ok "bge-m3 model already available"
+if [[ -n "${EMBEDDING_API_KEY:-}" ]]; then
+    EMBED_RESP=$(curl -sf "$EMBEDDING_API_URL/embeddings" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $EMBEDDING_API_KEY" \
+        -d "{\"model\": \"$EMBEDDING_MODEL\", \"input\": \"test\"}" 2>&1 || true)
+
+    if echo "$EMBED_RESP" | grep -q '"embedding"'; then
+        ok "Embedding API OK ($EMBEDDING_MODEL via OpenRouter)"
+    else
+        warn "Embedding test got unexpected response — check API key and model"
+    fi
 else
-    info "Pulling bge-m3 model (~600MB)..."
-    ollama pull bge-m3
-    ok "bge-m3 pulled"
+    warn "Skipping embedding test — EMBEDDING_API_KEY not set"
 fi
 
 # ── 6. Bridge check ─────────────────────────────────────────────
@@ -168,7 +184,7 @@ cat <<EOF
   ${CYAN}Infrastructure:${NC}
     Postgres + pgvector  → localhost:5433
     Redis                → localhost:6379
-    Ollama (bge-m3)      → localhost:11434
+    Embeddings (bge-m3)  → OpenRouter API
 
   ${CYAN}Commands:${NC}
     Start dashboard:     bash scripts/run-dashboard.sh

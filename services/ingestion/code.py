@@ -109,10 +109,10 @@ class CodeIngestor(BaseIngestor):
         return await self._ingest_docs(all_docs, "incremental")
 
     async def _ingest_docs(self, docs: list[Document], label: str) -> IngestResult:
-        """Ingest code chunks directly into pgvector via Ollama embeddings.
+        """Ingest code chunks into memory via Mem0 + episodic event log.
 
-        Bypasses Mem0's LLM extraction (which doesn't work well for code)
-        and stores embeddings directly for vector search.
+        Stores each chunk as an episodic event (always works) and also
+        attempts Mem0 semantic memory (may fail for some chunks).
         """
         import json
         import urllib.request
@@ -121,9 +121,6 @@ class CodeIngestor(BaseIngestor):
         ingested = 0
         skipped = 0
         errors = 0
-
-        ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        embed_model = os.getenv("EMBEDDING_MODEL", "bge-m3")
 
         for doc in docs:
             chunks = self.chunk(doc)

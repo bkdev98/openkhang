@@ -48,7 +48,7 @@ class DashboardServices:
     # ------------------------------------------------------------------
 
     async def get_health(self) -> list[dict[str, Any]]:
-        """Delegate to health_checker for Docker + Ollama + Postgres."""
+        """Delegate to health_checker for Docker + Embeddings API + Postgres."""
         return await get_all_health(self._pool)
 
     # ------------------------------------------------------------------

@@ -95,7 +95,7 @@ Start here based on your role:
 **Purpose:** Setup, configuration, and troubleshooting
 
 **Contains:**
-- Prerequisites (Docker, Ollama, Python, CLIs)
+- Prerequisites (Docker, Python, CLIs, OpenRouter API key)
 - 5-minute quick start (clone → configure → run → seed)
 - Detailed step-by-step setup (6 sections)
 - Configuration (persona, confidence thresholds, projects)
@@ -179,7 +179,7 @@ Start here based on your role:
 ## Key Concepts
 
 ### Three-Layer Memory
-1. **Semantic** — Vector search (pgvector + bge-m3)
+1. **Semantic** — Vector search (pgvector + BAAI/bge-m3 via OpenRouter API)
 2. **Episodic** — Append-only event log (raw data)
 3. **Working** — Session context (in-memory TTL)
 

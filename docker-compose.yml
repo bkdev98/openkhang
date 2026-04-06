@@ -47,7 +47,5 @@ services:
       timeout: 3s
       retries: 5
 
-  # NOTE: Ollama runs natively on macOS (Metal acceleration on M2).
-  # Start with: ollama serve
-  # The embedding model is pulled with: ollama pull bge-m3
-  # Services connect to http://localhost:11434 (host network)
+  # NOTE: Embeddings use OpenRouter BGE-M3 API (no local model needed).
+  # Set EMBEDDING_API_KEY in .env — get a key at https://openrouter.ai/keys
