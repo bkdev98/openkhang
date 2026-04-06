@@ -340,7 +340,8 @@ async def inward_chat(message: Message) -> None:
         elif action and not action.get("success"):
             reply += f"\n\n<b>Action failed:</b> {_esc(action.get('error', ''))}"
 
-        await thinking_msg.edit_text(reply)
+        # Telegram limit: 4096 chars per message. Split if needed.
+        await _send_long_text(thinking_msg, reply)
     except Exception as exc:
         logger.error("telegram: inward chat error: %s", exc)
         await thinking_msg.edit_text(f"Error: {exc}")
@@ -359,6 +360,22 @@ async def _resolve_draft_id(prefix: str) -> Any:
         f"{prefix}%",
     )
     return row["id"] if row else None
+
+
+async def _send_long_text(thinking_msg: Message, text: str, max_len: int = 4000) -> None:
+    """Send long text, splitting into multiple messages if needed."""
+    if len(text) <= max_len:
+        await thinking_msg.edit_text(text)
+        return
+
+    # Edit first message with first chunk
+    await thinking_msg.edit_text(text[:max_len])
+    # Send remaining chunks as new messages
+    remaining = text[max_len:]
+    while remaining:
+        chunk = remaining[:max_len]
+        remaining = remaining[max_len:]
+        await thinking_msg.answer(chunk)
 
 
 def _esc(text: str) -> str:
