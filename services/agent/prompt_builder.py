@@ -11,9 +11,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import yaml
+
 logger = logging.getLogger(__name__)
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
+PERSONA_PATH = Path(__file__).parent.parent.parent / "config" / "persona.yaml"
 
 
 class PromptBuilder:
@@ -26,6 +29,7 @@ class PromptBuilder:
     def __init__(self) -> None:
         self._outward_template: Optional[str] = None
         self._inward_template: Optional[str] = None
+        self._persona: Optional[dict] = None
 
     def build(
         self,
@@ -73,13 +77,17 @@ class PromptBuilder:
         style_examples: Optional[list[dict]],
     ) -> str:
         template = self._load_outward_template()
+        persona_block = self._format_persona()
 
         context_block = self._format_memories(memories, label="Relevant context")
         sender_block = self._format_memories(sender_context, label="About this person")
         style_block = self._format_style_examples(style_examples)
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-        parts = [template, f"\n## Current time\n{now}"]
+        parts = [template]
+        if persona_block:
+            parts.append(persona_block)
+        parts.append(f"\n## Current time\n{now}")
         if style_block:
             parts.append(style_block)
         if context_block:
@@ -149,6 +157,51 @@ class PromptBuilder:
             lines.append(f"- [{score:.2f}] {mem_text}")
         lines.append("</context>")
         return "\n".join(lines)
+
+    def _format_persona(self) -> str:
+        """Load persona.yaml and format as identity override block."""
+        persona = self._load_persona()
+        if not persona:
+            return ""
+
+        lines = ["## Identity (from persona.yaml — overrides defaults above)"]
+        lines.append(f"- Name: {persona.get('name', 'Unknown')}")
+        lines.append(f"- Role: {persona.get('role', 'Engineer')}")
+        lines.append(f"- Company: {persona.get('company', '')}")
+        lines.append(f"- Team: {persona.get('team', '')}")
+
+        facts = persona.get("identity_facts", [])
+        if facts:
+            lines.append("\n### Key facts about you")
+            for fact in facts:
+                lines.append(f"- {fact}")
+
+        never = persona.get("never_do", [])
+        if never:
+            lines.append("\n### NEVER do these (hard rules)")
+            for rule in never:
+                lines.append(f"- {rule}")
+
+        phrases = persona.get("uncertainty_phrases", {})
+        if phrases:
+            lines.append("\n### When uncertain, use one of these:")
+            for lang, plist in phrases.items():
+                for p in plist:
+                    lines.append(f"- ({lang}) \"{p}\"")
+
+        return "\n".join(lines)
+
+    def _load_persona(self) -> dict:
+        """Load persona.yaml. Re-reads from disk each time (no cache) so edits take effect on next request."""
+        try:
+            text = PERSONA_PATH.read_text(encoding="utf-8")
+            return yaml.safe_load(text) or {}
+        except FileNotFoundError:
+            logger.warning("persona.yaml not found at %s", PERSONA_PATH)
+            return {}
+        except yaml.YAMLError as exc:
+            logger.error("Failed to parse persona.yaml: %s", exc)
+            return {}
 
     def _format_style_examples(self, examples: Optional[list[dict]]) -> str:
         """Format few-shot style examples for outward mode."""
