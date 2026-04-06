@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .dashboard_services import DashboardServices
+from .inbox_relay import tail_inbox
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +35,19 @@ async def lifespan(app: FastAPI):
     """Initialise and tear down shared services."""
     global _svc
     _svc = DashboardServices()
+    relay_task = None
     try:
         await _svc.connect()
         logger.info("Dashboard services connected")
+        # Start inbox relay to feed new chat messages into events table
+        if _svc._pool:
+            relay_task = asyncio.create_task(tail_inbox(_svc._pool))
+            logger.info("Inbox relay started")
     except Exception as exc:
         logger.warning("Dashboard services connect failed (running degraded): %s", exc)
     yield
+    if relay_task:
+        relay_task.cancel()
     if _svc:
         await _svc.close()
 
