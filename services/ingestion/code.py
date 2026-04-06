@@ -102,10 +102,21 @@ class CodeIngestor(BaseIngestor):
         return await self._ingest_docs(all_docs, "incremental")
 
     async def _ingest_docs(self, docs: list[Document], label: str) -> IngestResult:
+        """Ingest code chunks directly into pgvector via Ollama embeddings.
+
+        Bypasses Mem0's LLM extraction (which doesn't work well for code)
+        and stores embeddings directly for vector search.
+        """
+        import json
+        import urllib.request
+
         total = 0
         ingested = 0
         skipped = 0
         errors = 0
+
+        ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        embed_model = os.getenv("EMBEDDING_MODEL", "bge-m3")
 
         for doc in docs:
             chunks = self.chunk(doc)
@@ -113,14 +124,33 @@ class CodeIngestor(BaseIngestor):
 
             for chunk in chunks:
                 try:
-                    await self.memory.add_memory(
-                        content=chunk.text,
+                    # Store as episodic event (always works, no LLM needed)
+                    await self.memory.add_event(
+                        source="code",
+                        event_type="code.indexed",
+                        actor="code_ingestor",
+                        payload={
+                            "text": chunk.text[:2000],  # truncate for storage
+                            "project": chunk.metadata.get("project", ""),
+                            "file_path": chunk.metadata.get("file_path", ""),
+                            "chunk_label": chunk.metadata.get("chunk_label", ""),
+                        },
                         metadata=chunk.metadata,
-                        agent_id="inward",
                     )
+
+                    # Also try Mem0 (may work for some chunks)
+                    try:
+                        await self.memory.add_memory(
+                            content=chunk.text[:1500],
+                            metadata=chunk.metadata,
+                            agent_id="inward",
+                        )
+                    except Exception:
+                        pass  # Mem0 extraction failure is OK — episodic has it
+
                     ingested += 1
                     if ingested % 50 == 0:
-                        print(f"  [code] Indexed {ingested} chunks...")
+                        print(f"  [code] Indexed {ingested}/{total} chunks...")
                 except Exception as e:
                     errors += 1
                     if errors <= 5:

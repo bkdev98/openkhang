@@ -152,21 +152,36 @@ class AgentPipeline:
                 limit=RAG_LIMIT,
             )
 
-            # Step 2b: if question mentions code/logic, also search code memories
+            # Step 2b: if question mentions code/logic, also search code events
             code_keywords = ["code", "logic", "function", "class", "implement",
                              "api", "endpoint", "bug", "fix", "error", "crash",
                              "build", "pipeline", "method", "screen", "view",
                              "model", "repository", "service", "compose"]
             body_lower = body.lower()
             if any(kw in body_lower for kw in code_keywords):
+                # Search Mem0 inward memories
                 code_memories = await self._memory.search(
                     body, agent_id="inward", limit=5,
                 )
-                # Merge without duplicates
                 seen_ids = {m.get("id") for m in memories}
                 for cm in code_memories:
                     if cm.get("id") not in seen_ids:
                         memories.append(cm)
+
+                # Also search episodic code events
+                code_events = await self._memory.query_events(
+                    source="code", event_type="code.indexed", limit=50,
+                )
+                # Simple keyword match on code events (vector search not available on events)
+                keywords = [w for w in body_lower.split() if len(w) > 3]
+                for evt in code_events:
+                    text = evt.get("payload", {}).get("text", "").lower()
+                    if any(kw in text for kw in keywords):
+                        memories.append({
+                            "memory": evt["payload"].get("text", "")[:500],
+                            "score": 0.5,
+                            "metadata": evt.get("metadata", {}),
+                        })
 
             # Step 3: sender relationship context
             sender_id = event.get("sender_id", "")
