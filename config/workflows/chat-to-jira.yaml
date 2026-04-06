@@ -1,0 +1,66 @@
+name: chat-to-jira
+description: When an urgent message mentions a bug, create a Jira ticket
+
+trigger:
+  event: chat_message
+  conditions:
+    - intent: request
+    - body_contains_any: ["bug", "lỗi", "broken", "down", "crash"]
+
+states:
+  classify:
+    actions:
+      - type: query_memory
+        params:
+          query: "{event.body}"
+          limit: 5
+    transitions:
+      - condition: "memories_found >= 1"
+        next: create_ticket
+      - condition: "always"
+        next: draft_response
+
+  create_ticket:
+    actions:
+      - type: create_jira
+        tier: 2
+        params:
+          summary: "Bug: {event.body_summary}"
+          description: "Reported in {event.room_name} by {event.sender}"
+    transitions:
+      - condition: "action_success"
+        next: notify
+      - condition: "action_needs_approval"
+        next: wait_approval
+
+  wait_approval:
+    actions: []
+    transitions:
+      - condition: "approved"
+        next: create_ticket
+      - condition: "rejected"
+        next: completed
+
+  notify:
+    actions:
+      - type: send_chat_draft
+        params:
+          room_id: "{event.room_id}"
+          body: "Created {jira_key} for this. Will look into it."
+    transitions:
+      - condition: "always"
+        next: completed
+
+  draft_response:
+    actions:
+      - type: send_chat_draft
+        params:
+          room_id: "{event.room_id}"
+          body: "Thanks for flagging. Let me check on this."
+    transitions:
+      - condition: "always"
+        next: completed
+
+  completed:
+    actions: []
+    transitions: []

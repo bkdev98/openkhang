@@ -1,0 +1,75 @@
+/* openkhang dashboard — minimal custom CSS (scrollbar, animations, status dots) */
+
+/* Thin dark scrollbar */
+.feed-scroll,
+.overflow-y-auto {
+    scrollbar-width: thin;
+    scrollbar-color: #1e2d4a #0f0f1a;
+}
+.feed-scroll::-webkit-scrollbar,
+.overflow-y-auto::-webkit-scrollbar {
+    width: 4px;
+}
+.feed-scroll::-webkit-scrollbar-track,
+.overflow-y-auto::-webkit-scrollbar-track {
+    background: #0f0f1a;
+}
+.feed-scroll::-webkit-scrollbar-thumb,
+.overflow-y-auto::-webkit-scrollbar-thumb {
+    background: #1e2d4a;
+    border-radius: 2px;
+}
+
+/* Feed item slide-in animation */
+.feed-item {
+    animation: slide-in 0.25s ease-out;
+}
+@keyframes slide-in {
+    from {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Draft card entrance */
+.draft-card {
+    animation: fade-in 0.2s ease-out;
+}
+@keyframes fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+/* Status dot */
+.status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.status-dot.ok    { background-color: #4ade80; }
+.status-dot.warn  { background-color: #facc15; }
+.status-dot.error { background-color: #f87171; }
+
+/* Pulse animation for live indicator */
+.status-dot.pulse {
+    animation: dot-pulse 2s infinite;
+}
+@keyframes dot-pulse {
+    0%, 100% { opacity: 1;   transform: scale(1);    }
+    50%       { opacity: 0.5; transform: scale(1.3); }
+}
+
+/* HTMX loading indicator hidden by default */
+.htmx-indicator {
+    display: none;
+}
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+    display: inline;
+}

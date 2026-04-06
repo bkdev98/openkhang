@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+    <!-- LEFT: Activity Feed + Stats -->
+    <div class="flex flex-col gap-4">
+
+        <!-- Stats bar -->
+        <div
+            id="stats-bar"
+            hx-get="/api/stats"
+            hx-trigger="load, every 30s"
+            hx-target="#stats-bar"
+            hx-swap="outerHTML"
+            class="bg-ok-card border border-ok-border rounded-lg p-4">
+            <p class="text-gray-500 text-xs">Loading stats...</p>
+        </div>
+
+        <!-- Activity feed -->
+        <div class="bg-ok-card border border-ok-border rounded-lg flex flex-col" style="height: 520px;">
+            <div class="px-4 py-3 border-b border-ok-border flex items-center justify-between">
+                <span class="text-sm font-semibold text-gray-300">Activity Feed</span>
+                <span class="status-dot ok pulse"></span>
+            </div>
+            <div
+                id="feed-container"
+                class="feed-scroll flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1"
+                hx-ext="sse"
+                sse-connect="/api/feed"
+                sse-swap="message"
+                hx-swap="afterbegin">
+                <p class="text-gray-600 text-xs text-center py-4">Connecting to live feed...</p>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- CENTER: Draft Review Queue + Chat -->
+    <div class="flex flex-col gap-4">
+
+        <!-- Draft review queue -->
+        <div class="bg-ok-card border border-ok-border rounded-lg flex flex-col" style="min-height: 300px;">
+            <div class="px-4 py-3 border-b border-ok-border flex items-center justify-between">
+                <span class="text-sm font-semibold text-gray-300">Draft Review Queue</span>
+                <button
+                    hx-get="/api/drafts"
+                    hx-target="#drafts-container"
+                    hx-swap="innerHTML"
+                    class="text-xs text-ok-blue hover:text-blue-300 transition-colors">
+                    refresh
+                </button>
+            </div>
+            <div
+                id="drafts-container"
+                hx-get="/api/drafts"
+                hx-trigger="load, every 10s"
+                hx-swap="innerHTML"
+                class="flex-1 overflow-y-auto p-3">
+                <p class="text-gray-600 text-xs text-center py-4">Loading drafts...</p>
+            </div>
+        </div>
+
+        <!-- Inward chat -->
+        <div class="bg-ok-card border border-ok-border rounded-lg">
+            <div class="px-4 py-3 border-b border-ok-border">
+                <span class="text-sm font-semibold text-gray-300">Ask the Twin</span>
+                <span class="text-xs text-gray-500 ml-2">inward mode</span>
+            </div>
+            <div class="p-4">
+                <form
+                    hx-post="/api/chat"
+                    hx-target="#chat-response"
+                    hx-swap="innerHTML"
+                    hx-indicator="#chat-spinner"
+                    class="flex flex-col gap-3">
+                    <textarea
+                        name="question"
+                        placeholder="Ask anything about your context, preferences, or ongoing tasks..."
+                        rows="3"
+                        class="bg-ok-bg border border-ok-border rounded px-3 py-2 text-sm text-gray-200
+                               placeholder-gray-600 focus:outline-none focus:border-ok-blue resize-none w-full">
+                    </textarea>
+                    <div class="flex items-center gap-3">
+                        <button
+                            type="submit"
+                            class="bg-ok-accent hover:bg-ok-blue text-white text-xs px-4 py-2
+                                   rounded transition-colors font-medium">
+                            Send
+                        </button>
+                        <span id="chat-spinner" class="htmx-indicator text-xs text-gray-500">thinking...</span>
+                    </div>
+                </form>
+                <div id="chat-response" class="mt-3"></div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- RIGHT: Service Health -->
+    <div class="flex flex-col gap-4">
+
+        <div
+            id="health-panel"
+            hx-get="/api/health"
+            hx-trigger="load, every 30s"
+            hx-target="#health-panel"
+            hx-swap="outerHTML"
+            class="bg-ok-card border border-ok-border rounded-lg">
+            <div class="px-4 py-3 border-b border-ok-border">
+                <span class="text-sm font-semibold text-gray-300">Service Health</span>
+            </div>
+            <div class="p-3">
+                <p class="text-gray-600 text-xs text-center py-4">Loading health...</p>
+            </div>
+        </div>
+
+    </div>
+
+</div>
+
+<!-- SSE event renderer: injected into feed via HTMX sse-swap -->
+<script>
+    // Format SSE data events as feed cards before HTMX injects them
+    document.body.addEventListener('htmx:sseMessage', function(evt) {
+        try {
+            var data = JSON.parse(evt.detail.data);
+            if (data.error) return;
+            var ts = data.created_at ? data.created_at.replace('T', ' ').slice(0, 19) : '';
+            var source = data.source || 'unknown';
+            var etype  = data.event_type || '';
+            var actor  = data.actor || '';
+            var html = '<div class="feed-item bg-ok-bg rounded px-3 py-2 text-xs font-mono border border-ok-border">'
+                + '<div class="flex items-center justify-between gap-2 mb-1">'
+                + '<span class="text-ok-blue">' + source + '</span>'
+                + '<span class="text-gray-500">' + ts + '</span>'
+                + '</div>'
+                + '<div class="text-gray-300">' + etype + '</div>'
+                + (actor ? '<div class="text-gray-500">actor: ' + actor + '</div>' : '')
+                + '</div>';
+            evt.detail.data = html;
+        } catch(e) {}
+    });
+</script>
+{% endblock %}

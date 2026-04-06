@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>openkhang — Digital Twin Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        'ok-bg':     '#0f0f1a',
+                        'ok-card':   '#16213e',
+                        'ok-accent': '#0f3460',
+                        'ok-blue':   '#53a8b6',
+                        'ok-border': '#1e2d4a',
+                    },
+                    fontFamily: {
+                        mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="bg-ok-bg text-gray-200 min-h-screen font-sans">
+
+    <!-- Nav -->
+    <nav class="bg-ok-card border-b border-ok-border px-6 py-3 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <span class="text-ok-blue font-mono font-bold text-lg">openkhang</span>
+            <span class="text-gray-500 text-sm">/ digital twin</span>
+        </div>
+        <div class="flex items-center gap-4 text-xs text-gray-500">
+            <span
+                hx-get="/api/stats"
+                hx-trigger="load, every 30s"
+                hx-target="#nav-stats"
+                id="nav-stats-trigger">
+            </span>
+            <span id="nav-stats" class="text-gray-500">loading...</span>
+            <span class="status-dot ok"></span>
+            <span class="text-gray-400">live</span>
+        </div>
+    </nav>
+
+    <!-- Main content -->
+    <main class="container mx-auto px-4 py-6 max-w-screen-xl">
+        {% block content %}{% endblock %}
+    </main>
+
+</body>
+</html>

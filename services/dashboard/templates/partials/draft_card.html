@@ -1,0 +1,84 @@
+<!-- Single draft reply card. Used within drafts_list.html -->
+<div class="draft-card bg-ok-bg border border-ok-border rounded-lg p-3 flex flex-col gap-2"
+     id="draft-{{ draft.id_short }}">
+
+    <!-- Header: room + confidence + timestamp -->
+    <div class="flex items-center justify-between gap-2">
+        <div class="flex items-center gap-2">
+            <span class="text-xs font-mono text-ok-blue truncate max-w-32"
+                  title="{{ draft.room_id }}">
+                {{ draft.room_name or draft.room_id[:20] }}
+            </span>
+            <span class="text-xs px-1.5 py-0.5 rounded font-mono
+                {{ 'bg-green-900 text-green-300' if draft.confidence_pct >= 80
+                   else 'bg-yellow-900 text-yellow-300' if draft.confidence_pct >= 50
+                   else 'bg-red-900 text-red-300' }}">
+                {{ draft.confidence_pct }}%
+            </span>
+        </div>
+        <span class="text-xs text-gray-600 font-mono">{{ draft.id_short }}</span>
+    </div>
+
+    <!-- Original message -->
+    <div class="text-xs text-gray-500 bg-ok-card rounded px-2 py-1 border-l-2 border-gray-600 italic">
+        {{ draft.original_message[:120] }}{% if draft.original_message|length > 120 %}...{% endif %}
+    </div>
+
+    <!-- Draft reply text (editable) -->
+    <div class="relative">
+        <textarea
+            id="edit-text-{{ draft.id_short }}"
+            rows="3"
+            class="w-full bg-ok-card border border-ok-border rounded px-2 py-1.5 text-xs text-gray-200
+                   font-mono resize-none focus:outline-none focus:border-ok-blue">{{ draft.draft_text }}</textarea>
+    </div>
+
+    <!-- Actions -->
+    <div class="flex items-center gap-2">
+        <!-- Approve -->
+        <button
+            hx-post="/api/drafts/{{ draft.id }}/approve"
+            hx-target="#drafts-container"
+            hx-swap="innerHTML"
+            class="text-xs px-3 py-1 bg-green-800 hover:bg-green-700 text-green-200
+                   rounded transition-colors font-medium">
+            Approve
+        </button>
+
+        <!-- Edit & approve -->
+        <button
+            onclick="submitEdit('{{ draft.id }}', '{{ draft.id_short }}')"
+            class="text-xs px-3 py-1 bg-ok-accent hover:bg-ok-blue text-white
+                   rounded transition-colors font-medium">
+            Edit & Send
+        </button>
+
+        <!-- Reject -->
+        <button
+            hx-post="/api/drafts/{{ draft.id }}/reject"
+            hx-target="#drafts-container"
+            hx-swap="innerHTML"
+            class="text-xs px-3 py-1 bg-red-900 hover:bg-red-800 text-red-300
+                   rounded transition-colors font-medium">
+            Reject
+        </button>
+
+        <span class="text-xs text-gray-600 ml-auto">{{ draft.created_at_str }}</span>
+    </div>
+</div>
+
+<script>
+function submitEdit(draftId, shortId) {
+    var text = document.getElementById('edit-text-' + shortId).value;
+    var form = document.createElement('form');
+    form.style.display = 'none';
+    var input = document.createElement('input');
+    input.name = 'edited_text';
+    input.value = text;
+    form.appendChild(input);
+    document.body.appendChild(form);
+    htmx.ajax('POST', '/api/drafts/' + draftId + '/edit',
+        {target: '#drafts-container', swap: 'innerHTML', values: {edited_text: text}});
+    document.body.removeChild(form);
+}
+</script>

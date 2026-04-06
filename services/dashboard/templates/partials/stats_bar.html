@@ -1,0 +1,20 @@
+<div
+    id="stats-bar"
+    class="bg-ok-card border border-ok-border rounded-lg p-4 grid grid-cols-2 gap-3">
+    <div class="flex flex-col">
+        <span class="text-2xl font-mono font-bold text-ok-blue">{{ stats.get('pending_drafts', 0) }}</span>
+        <span class="text-xs text-gray-500 mt-1">pending drafts</span>
+    </div>
+    <div class="flex flex-col">
+        <span class="text-2xl font-mono font-bold text-ok-blue">{{ stats.get('events_today', 0) }}</span>
+        <span class="text-xs text-gray-500 mt-1">events today</span>
+    </div>
+    <div class="flex flex-col">
+        <span class="text-2xl font-mono font-bold text-green-400">{{ stats.get('approved_today', 0) }}</span>
+        <span class="text-xs text-gray-500 mt-1">approved today</span>
+    </div>
+    <div class="flex flex-col">
+        <span class="text-2xl font-mono font-bold text-gray-400">{{ stats.get('total_events', 0) }}</span>
+        <span class="text-xs text-gray-500 mt-1">total events</span>
+    </div>
+</div>

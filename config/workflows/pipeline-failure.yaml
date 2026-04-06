@@ -1,0 +1,31 @@
+name: pipeline-failure
+description: Auto-investigate pipeline failures and notify the owner
+
+trigger:
+  event: pipeline_status
+  conditions:
+    - status: failed
+
+states:
+  investigate:
+    actions:
+      - type: query_memory
+        params:
+          query: "pipeline failure {event.project} {event.branch}"
+    transitions:
+      - condition: "always"
+        next: notify_owner
+
+  notify_owner:
+    actions:
+      - type: send_chat_draft
+        params:
+          room_id: "{event.room_id}"
+          body: "Pipeline failed on {event.branch}. Error: {event.error_summary}"
+    transitions:
+      - condition: "always"
+        next: completed
+
+  completed:
+    actions: []
+    transitions: []

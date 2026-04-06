@@ -51,3 +51,33 @@ CREATE TABLE IF NOT EXISTS sync_state (
 
 -- Note: Mem0 creates its own tables (mem0_memories, etc.) automatically
 -- when Memory() is first initialised. pgvector extension above is sufficient.
+
+-- Workflow engine tables (Phase 4)
+
+CREATE TABLE IF NOT EXISTS workflow_instances (
+    id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    workflow_name  VARCHAR(100) NOT NULL,
+    current_state  VARCHAR(100) NOT NULL,
+    context        JSONB        NOT NULL DEFAULT '{}',
+    trigger_event  JSONB        NOT NULL DEFAULT '{}',
+    status         VARCHAR(20)  NOT NULL DEFAULT 'active',
+    created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_wf_status ON workflow_instances(status);
+CREATE INDEX IF NOT EXISTS idx_wf_name   ON workflow_instances(workflow_name);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    workflow_id  UUID         REFERENCES workflow_instances(id),
+    action_type  VARCHAR(100) NOT NULL,
+    tier         INTEGER      NOT NULL DEFAULT 1,
+    params       JSONB        NOT NULL DEFAULT '{}',
+    result       JSONB        NOT NULL DEFAULT '{}',
+    approved_by  VARCHAR(255),
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_workflow ON audit_log(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_audit_created  ON audit_log(created_at);
