@@ -108,9 +108,9 @@ async def find_room_by_person(name: str) -> Optional[dict[str, str]]:
             # Bonus for exact substring match
             if query in dn_normalized:
                 score += 2
-            # Prefer DM rooms over group rooms
-            if is_dm:
-                score += 3
+            # ONLY match DM rooms for sending messages — never send to groups
+            if not is_dm:
+                continue
 
             if score > best_score:
                 best_score = score
