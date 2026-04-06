@@ -239,10 +239,8 @@ class AgentPipeline:
             # Step 5: LLM call
             # Outward: structured JSON (confidence scoring needs it)
             # Inward: plain text (no JSON wrapper, just the answer)
-            # Outward: short replies (1024 tokens), structured JSON
-            # Inward: longer answers (4096 tokens), plain text
             temperature = 0.3 if mode == "outward" else 0.5
-            max_tokens = 1024 if mode == "outward" else 4096
+            max_tokens = 4096
             llm_response: LLMResponse = await self._llm.generate(
                 messages=messages,
                 temperature=temperature,
