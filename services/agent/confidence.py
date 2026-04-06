@@ -25,7 +25,7 @@ MODIFIER_DEADLINE_RISK = -0.20     # message asks about timeline/deadline
 MODIFIER_UNKNOWN_SENDER = -0.15    # no prior interactions (reduced from -0.30)
 MODIFIER_LANGUAGE_MISMATCH = -0.10 # message language differs from persona primary
 MODIFIER_SOCIAL_INTENT = +0.25     # social messages (hi, thanks, emoji) are low-risk
-MODIFIER_GROUP_WORK_MSG = -0.50    # work messages in group chats → always draft
+MODIFIER_GROUP_SOCIAL_SKIP = -0.90  # social/humor in group chats → skip (don't reply)
 MODIFIER_CAUTIOUS_SENDER = -0.30   # messages from managers/leads → always draft
 
 
@@ -75,12 +75,11 @@ class ConfidenceScorer:
         if not sender_known:
             base += MODIFIER_UNKNOWN_SENDER
 
-        # Group chat logic: only auto-reply to social/fun, always draft work msgs
+        # Group chat logic: reply to work/mentions, SKIP social/humor
         if is_group:
-            if intent in ("social",):
-                base += MODIFIER_SOCIAL_INTENT  # fun stuff in groups is fine
-            else:
-                base += MODIFIER_GROUP_WORK_MSG  # work msgs in groups → always draft
+            if intent in ("social", "fyi"):
+                base += MODIFIER_GROUP_SOCIAL_SKIP  # don't reply to social in groups
+            # work questions/requests in groups → normal confidence (draft if unsure)
         else:
             # DM: social messages are safe to auto-reply
             if intent in ("social", "fyi"):

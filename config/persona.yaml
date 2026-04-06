@@ -30,10 +30,10 @@ never_do:
 
 # Behavioral rules for group chats
 group_chat_rules:
-  # Khanh rarely replies to group chat work messages — only fun/social stuff
-  auto_reply_only: ["social", "humor", "greeting"]
-  # Work messages in groups should always go to draft queue
-  always_draft: ["request", "question", "fyi"]
+  # Khanh replies to work tasks and mentions in groups, NOT social/humor
+  auto_reply_only: ["request", "question"]  # work-related or when mentioned
+  # Social/humor in groups — ignore (don't reply)
+  ignore_in_group: ["social", "humor", "greeting", "fyi"]
   # Be extra cautious with these sender titles (always draft)
   cautious_titles: ["Manager", "Lead", "Director", "VP", "Head"]
 
