@@ -25,6 +25,8 @@ MODIFIER_DEADLINE_RISK = -0.20     # message asks about timeline/deadline
 MODIFIER_UNKNOWN_SENDER = -0.15    # no prior interactions (reduced from -0.30)
 MODIFIER_LANGUAGE_MISMATCH = -0.10 # message language differs from persona primary
 MODIFIER_SOCIAL_INTENT = +0.25     # social messages (hi, thanks, emoji) are low-risk
+MODIFIER_GROUP_WORK_MSG = -0.50    # work messages in group chats → always draft
+MODIFIER_CAUTIOUS_SENDER = -0.30   # messages from managers/leads → always draft
 
 
 class ConfidenceScorer:
@@ -59,6 +61,7 @@ class ConfidenceScorer:
             Clipped float in [0.0, 1.0].
         """
         base = llm_response.confidence
+        is_group = self._is_group_chat(event)
 
         # Bonus: many grounding memories available
         if len(memories) >= 3:
@@ -72,9 +75,20 @@ class ConfidenceScorer:
         if not sender_known:
             base += MODIFIER_UNKNOWN_SENDER
 
-        # Bonus: social/greeting messages are low-risk and should auto-reply
-        if intent in ("social", "fyi"):
-            base += MODIFIER_SOCIAL_INTENT
+        # Group chat logic: only auto-reply to social/fun, always draft work msgs
+        if is_group:
+            if intent in ("social",):
+                base += MODIFIER_SOCIAL_INTENT  # fun stuff in groups is fine
+            else:
+                base += MODIFIER_GROUP_WORK_MSG  # work msgs in groups → always draft
+        else:
+            # DM: social messages are safe to auto-reply
+            if intent in ("social", "fyi"):
+                base += MODIFIER_SOCIAL_INTENT
+
+        # Penalty: sender title suggests manager/lead (from room display name)
+        if self._is_cautious_sender(event):
+            base += MODIFIER_CAUTIOUS_SENDER
 
         # Penalty: detected language mismatch (crude heuristic)
         if self._language_mismatch(event.get("body", "")):
@@ -109,6 +123,27 @@ class ConfidenceScorer:
         if room_id and room_id in graduated:
             return float(graduated[room_id])
         return float(self._config.get("default_threshold", 0.85))
+
+    def _is_group_chat(self, event: dict) -> bool:
+        """Heuristic: group chats have room_name set and it's not a DM pattern."""
+        room_name = event.get("room_name", "")
+        # Group chats typically have named rooms; DMs are often unnamed or 1:1
+        if not room_name:
+            return False
+        # DM rooms in Matrix are usually unnamed or have the other person's name
+        # Group rooms usually have descriptive names with multiple words
+        return bool(room_name and len(room_name) > 3)
+
+    def _is_cautious_sender(self, event: dict) -> bool:
+        """Check if sender title (from room display) contains manager/lead keywords."""
+        # The sender display name in Google Chat often includes title
+        # e.g. "TRẦN ĐÌNH CHƯƠNG - ITC - App Dev - Manager - Mobile Engineering"
+        sender = event.get("sender_id", "") + " " + event.get("sender", "")
+        room_name = event.get("room_name", "")
+        # Check persona config for cautious titles
+        cautious = ["Manager", "Lead", "Director", "VP", "Head", "Chief"]
+        check_text = sender.lower()
+        return any(title.lower() in check_text for title in cautious)
 
     def _language_mismatch(self, body: str) -> bool:
         """Very crude check: if body is all-ASCII with no Vietnamese chars,
