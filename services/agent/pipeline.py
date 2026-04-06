@@ -179,7 +179,12 @@ class AgentPipeline:
                              "type", "field", "param", "variable", "string",
                              "money", "payment", "transaction", "wallet"]
             body_lower = body.lower()
-            should_search_code = (mode == "inward") or any(kw in body_lower for kw in code_keywords)
+            # Always search code for: inward mode, questions, requests, or keyword matches
+            should_search_code = (
+                mode == "inward"
+                or intent in ("question", "request")
+                or any(kw in body_lower for kw in code_keywords)
+            )
             if should_search_code:
                 # Search Mem0 inward memories
                 code_memories = await self._memory.search(
