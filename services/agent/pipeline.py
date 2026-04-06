@@ -238,11 +238,14 @@ class AgentPipeline:
                 style_examples=self._style_examples if mode == "outward" else None,
             )
 
-            # Step 5: LLM call — lower temperature for outward (style consistency)
+            # Step 5: LLM call
+            # Outward: structured JSON (confidence scoring needs it)
+            # Inward: plain text (no JSON wrapper, just the answer)
             temperature = 0.3 if mode == "outward" else 0.5
             llm_response: LLMResponse = await self._llm.generate(
                 messages=messages,
                 temperature=temperature,
+                require_structured=(mode == "outward"),
             )
 
             # Step 6: confidence scoring
