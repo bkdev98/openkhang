@@ -363,19 +363,30 @@ async def _resolve_draft_id(prefix: str) -> Any:
 
 
 async def _send_long_text(thinking_msg: Message, text: str, max_len: int = 4000) -> None:
-    """Send long text, splitting into multiple messages if needed."""
-    if len(text) <= max_len:
-        await thinking_msg.edit_text(text)
-        return
+    """Send long text, handling parse errors and splitting if needed."""
+    # Try with default parse mode first, fall back to no parsing
+    for parse_mode in [None, "disabled"]:
+        try:
+            if parse_mode == "disabled":
+                # Strip HTML parse mode — send as plain text
+                await thinking_msg.edit_text(text[:max_len], parse_mode=None)
+            else:
+                await thinking_msg.edit_text(text[:max_len])
+            break
+        except Exception as exc:
+            if "can't parse" in str(exc).lower() or "bad request" in str(exc).lower():
+                continue
+            raise
 
-    # Edit first message with first chunk
-    await thinking_msg.edit_text(text[:max_len])
     # Send remaining chunks as new messages
     remaining = text[max_len:]
     while remaining:
         chunk = remaining[:max_len]
         remaining = remaining[max_len:]
-        await thinking_msg.answer(chunk)
+        try:
+            await thinking_msg.answer(chunk)
+        except Exception:
+            await thinking_msg.answer(chunk, parse_mode=None)
 
 
 def _esc(text: str) -> str:
