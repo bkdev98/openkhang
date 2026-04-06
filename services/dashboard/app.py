@@ -20,6 +20,7 @@ from fastapi.templating import Jinja2Templates
 
 from .dashboard_services import DashboardServices
 from .inbox_relay import tail_inbox
+from .agent_relay import run_agent_relay
 
 logger = logging.getLogger(__name__)
 
@@ -36,18 +37,24 @@ async def lifespan(app: FastAPI):
     global _svc
     _svc = DashboardServices()
     relay_task = None
+    agent_task = None
     try:
         await _svc.connect()
         logger.info("Dashboard services connected")
-        # Start inbox relay to feed new chat messages into events table
         if _svc._pool:
+            # Tail JSONL → events table
             relay_task = asyncio.create_task(tail_inbox(_svc._pool))
             logger.info("Inbox relay started")
+            # Process new chat events through agent pipeline → draft replies
+            agent_task = asyncio.create_task(run_agent_relay(_svc._pool))
+            logger.info("Agent relay started")
     except Exception as exc:
         logger.warning("Dashboard services connect failed (running degraded): %s", exc)
     yield
     if relay_task:
         relay_task.cancel()
+    if agent_task:
+        agent_task.cancel()
     if _svc:
         await _svc.close()
 
