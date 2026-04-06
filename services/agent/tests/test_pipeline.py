@@ -270,10 +270,10 @@ class TestMemoryUsage:
             "sender_id": "alice",
         })
 
-        mock_memory.search.assert_called_once()
-        call_args = mock_memory.search.call_args
-        assert "payment migration status?" in call_args.args or \
-               call_args.kwargs.get("query") == "payment migration status?"
+        assert mock_memory.search.call_count >= 1
+        first_call = mock_memory.search.call_args_list[0]
+        assert "payment migration status?" in first_call.args or \
+               first_call.kwargs.get("query") == "payment migration status?"
 
     @pytest.mark.asyncio
     async def test_sender_context_fetched(self, pipeline, mock_llm, mock_memory):

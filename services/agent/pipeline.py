@@ -168,13 +168,19 @@ class AgentPipeline:
                 limit=RAG_LIMIT,
             )
 
-            # Step 2b: if question mentions code/logic, also search code events
+            # Step 2b: search code events for technical questions
+            # Inward mode always searches code (Khanh asks work questions)
+            # Outward mode only when keywords match
             code_keywords = ["code", "logic", "function", "class", "implement",
                              "api", "endpoint", "bug", "fix", "error", "crash",
                              "build", "pipeline", "method", "screen", "view",
-                             "model", "repository", "service", "compose"]
+                             "model", "repository", "service", "compose",
+                             "enum", "value", "constant", "config", "source",
+                             "type", "field", "param", "variable", "string",
+                             "money", "payment", "transaction", "wallet"]
             body_lower = body.lower()
-            if any(kw in body_lower for kw in code_keywords):
+            should_search_code = (mode == "inward") or any(kw in body_lower for kw in code_keywords)
+            if should_search_code:
                 # Search Mem0 inward memories
                 code_memories = await self._memory.search(
                     body, agent_id="inward", limit=5,
