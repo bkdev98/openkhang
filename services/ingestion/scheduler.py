@@ -23,11 +23,11 @@ if TYPE_CHECKING:
 
 # Default poll intervals in seconds
 _DEFAULT_INTERVALS: dict[str, int] = {
-    "jira": 5 * 60,        # 5 minutes
-    "gitlab": 5 * 60,      # 5 minutes
-    "confluence": 60 * 60, # 1 hour
-    "code": 10 * 60,       # 10 minutes (git-based incremental)
+    "jira": 30 * 60,       # 30 minutes
+    "confluence": 4 * 60 * 60,  # 4 hours
+    "code": 30 * 60,       # 30 minutes (git-based incremental)
     "chat": 0,             # realtime via Redis — no polling
+    # gitlab: on-demand only (via run_once) — not polled by default
 }
 
 
@@ -67,14 +67,12 @@ class IngestionScheduler:
 
         # Lazy imports to avoid circular deps at module load
         from .jira import JiraIngestor
-        from .gitlab import GitLabIngestor
         from .confluence import ConfluenceIngestor
         from .chat import ChatIngestor
         from .code import CodeIngestor
 
         ingestors: dict[str, Any] = {
             "jira": JiraIngestor(self._memory),
-            "gitlab": GitLabIngestor(self._memory),
             "confluence": ConfluenceIngestor(self._memory),
             "chat": ChatIngestor(self._memory),
         }
