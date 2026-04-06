@@ -5,9 +5,11 @@ Health checking is delegated to health_checker module.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import urllib.parse
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -88,8 +90,18 @@ class DashboardServices:
             return []
 
     async def approve_draft(self, draft_id: str) -> bool:
-        """Mark draft as approved. Returns True on success."""
-        return await self._transition(draft_id, "approved", "approve")
+        """Mark draft as approved and send via Matrix. Returns True on success."""
+        # Fetch draft details before transitioning
+        row = await self._pool.fetchrow(  # type: ignore[union-attr]
+            "SELECT room_id, draft_text FROM draft_replies WHERE id = $1 AND status = 'pending'",
+            UUID(draft_id),
+        )
+        if not row:
+            return False
+        ok = await self._transition(draft_id, "approved", "approve")
+        if ok:
+            await self._send_matrix_message(row["room_id"], row["draft_text"])
+        return ok
 
     async def reject_draft(self, draft_id: str) -> bool:
         """Mark draft as rejected. Returns True on success."""
@@ -110,7 +122,15 @@ class DashboardServices:
                 edited_text,
                 datetime.now(timezone.utc),
             )
-            return result == "UPDATE 1"
+            ok = result == "UPDATE 1"
+            if ok:
+                row = await self._pool.fetchrow(  # type: ignore[union-attr]
+                    "SELECT room_id FROM draft_replies WHERE id = $1",
+                    UUID(draft_id),
+                )
+                if row:
+                    await self._send_matrix_message(row["room_id"], edited_text)
+            return ok
         except Exception as exc:
             logger.error("edit_draft %s failed: %s", draft_id, exc)
             return False
@@ -198,6 +218,37 @@ class DashboardServices:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    async def _send_matrix_message(self, room_id: str, text: str) -> bool:
+        """Send a message to a Matrix room via Synapse API."""
+        import urllib.request
+        import uuid as _uuid
+
+        hs = os.getenv("MATRIX_HOMESERVER", "http://localhost:8008")
+        token = os.getenv("MATRIX_ACCESS_TOKEN", "")
+        if not token or not room_id:
+            logger.warning("_send_matrix_message: missing token or room_id")
+            return False
+
+        txn_id = str(_uuid.uuid4())
+        enc_room = urllib.parse.quote(room_id)
+        url = f"{hs}/_matrix/client/v3/rooms/{enc_room}/send/m.room.message/{txn_id}"
+        body = json.dumps({"msgtype": "m.text", "body": text}).encode()
+
+        req = urllib.request.Request(url, data=body, method="PUT")
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Content-Type", "application/json")
+
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None, lambda: urllib.request.urlopen(req, timeout=10)
+            )
+            logger.info("Sent message to %s: %s", room_id, text[:60])
+            return True
+        except Exception as exc:
+            logger.error("Matrix send failed for %s: %s", room_id, exc)
+            return False
 
     async def _transition(self, draft_id: str, status: str, action: str) -> bool:
         self._require_pool()
