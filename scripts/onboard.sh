@@ -2,14 +2,15 @@
 # onboard.sh — First-time setup for openkhang digital twin
 #
 # Steps:
-#   1. Check prerequisites (Docker, Python)
+#   1. Check prerequisites (Docker, Python, Node/Meridian)
 #   2. Set up .env if missing
 #   3. Set up Python venv + deps
 #   4. Start infrastructure (Postgres, Redis)
-#   5. Verify embedding API key
-#   6. Check Matrix bridge
-#   7. Initial data check
-#   8. Print summary
+#   5. Verify embedding API (OpenRouter)
+#   6. Verify Meridian (memory extraction + agent replies)
+#   7. Check Matrix bridge
+#   8. Initial data check
+#   9. Print summary
 #
 # Usage: bash scripts/onboard.sh
 
@@ -33,7 +34,7 @@ fail()  { printf '  %b[fail]%b %s\n' "$RED" "$NC" "$*"; }
 step "Checking prerequisites"
 
 MISSING=0
-for cmd in docker python3; do
+for cmd in docker python3 node; do
     if command -v "$cmd" &>/dev/null; then
         ok "$cmd found"
     else
@@ -41,6 +42,14 @@ for cmd in docker python3; do
         MISSING=$((MISSING + 1))
     fi
 done
+
+# Check Meridian
+if command -v meridian &>/dev/null; then
+    ok "meridian found ($(meridian --version 2>/dev/null || echo 'unknown version'))"
+else
+    fail "meridian not found — install with: npm install -g @rynfar/meridian"
+    MISSING=$((MISSING + 1))
+fi
 
 # Optional CLIs
 for cmd in jira glab; do
@@ -64,7 +73,6 @@ if [[ ! -f .env ]]; then
         cp .env.example .env
         warn ".env created from .env.example — edit it with your API keys"
         info "Required: EMBEDDING_API_KEY (get at https://openrouter.ai/keys)"
-        info "Required: MERIDIAN_URL (for Mem0 memory extraction via Haiku)"
         read -rp "  Press Enter to continue after editing .env (or Ctrl+C to abort)... "
     else
         fail ".env.example not found"
@@ -82,12 +90,6 @@ else
     fail "EMBEDDING_API_KEY is not set — embeddings will not work"
     info "Get a key at https://openrouter.ai/keys and add to .env"
     exit 1
-fi
-
-if curl -sf "${MERIDIAN_URL:-http://127.0.0.1:3456}/v1/models" &>/dev/null; then
-    ok "Meridian is running (memory extraction via Haiku)"
-else
-    warn "Meridian not running — memory extraction will fail. Start with: meridian"
 fi
 
 # ── 3. Python venv ───────────────────────────────────────────────
@@ -126,27 +128,43 @@ docker compose exec -T postgres psql -U openkhang -d openkhang \
 ok "Schema applied"
 
 # ── 5. Verify embedding API ─────────────────────────────────────
-step "Verifying embedding API"
+step "Verifying embedding API (OpenRouter)"
 
 EMBEDDING_API_URL="${EMBEDDING_API_URL:-https://openrouter.ai/api/v1}"
 EMBEDDING_MODEL="${EMBEDDING_MODEL:-BAAI/bge-m3}"
 
-if [[ -n "${EMBEDDING_API_KEY:-}" ]]; then
-    EMBED_RESP=$(curl -sf "$EMBEDDING_API_URL/embeddings" \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $EMBEDDING_API_KEY" \
-        -d "{\"model\": \"$EMBEDDING_MODEL\", \"input\": \"test\"}" 2>&1 || true)
+EMBED_RESP=$(curl -sf --max-time 10 "$EMBEDDING_API_URL/embeddings" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $EMBEDDING_API_KEY" \
+    -d "{\"model\": \"$EMBEDDING_MODEL\", \"input\": \"test\"}" 2>&1 || true)
 
-    if echo "$EMBED_RESP" | grep -q '"embedding"'; then
-        ok "Embedding API OK ($EMBEDDING_MODEL via OpenRouter)"
-    else
-        warn "Embedding test got unexpected response — check API key and model"
-    fi
+if echo "$EMBED_RESP" | grep -q '"embedding"'; then
+    ok "Embedding API OK ($EMBEDDING_MODEL via OpenRouter)"
 else
-    warn "Skipping embedding test — EMBEDDING_API_KEY not set"
+    warn "Embedding test failed — check EMBEDDING_API_KEY and network"
+    info "If DNS is blocked, run: sudo ~/dns-fix.sh openrouter.ai"
 fi
 
-# ── 6. Bridge check ─────────────────────────────────────────────
+# ── 6. Verify Meridian ──────────────────────────────────────────
+step "Checking Meridian (agent replies + memory extraction)"
+
+MERIDIAN_URL="${MERIDIAN_URL:-http://127.0.0.1:3456}"
+
+if curl -sf --max-time 3 "$MERIDIAN_URL/v1/models" &>/dev/null; then
+    ok "Meridian is running at $MERIDIAN_URL"
+else
+    info "Starting Meridian in background..."
+    meridian &>/dev/null &
+    sleep 3
+    if curl -sf --max-time 3 "$MERIDIAN_URL/v1/models" &>/dev/null; then
+        ok "Meridian started at $MERIDIAN_URL"
+    else
+        warn "Could not start Meridian — run manually: meridian"
+        info "Meridian is needed for agent replies and memory extraction (Haiku 4.5)"
+    fi
+fi
+
+# ── 7. Bridge check ─────────────────────────────────────────────
 step "Checking Matrix bridge"
 
 if curl -sf http://localhost:8008/_matrix/client/v3/login &>/dev/null; then
@@ -155,7 +173,7 @@ else
     warn "Synapse not running. Run: bash scripts/setup-bridge.sh"
 fi
 
-# ── 7. Initial ingestion ────────────────────────────────────────
+# ── 8. Initial data check ───────────────────────────────────────
 step "Initial data check"
 
 EVENT_COUNT=$(docker compose exec -T postgres psql -U openkhang -d openkhang -tAc \
@@ -164,16 +182,12 @@ EVENT_COUNT=$(docker compose exec -T postgres psql -U openkhang -d openkhang -tA
 if [[ "$EVENT_COUNT" -gt 0 ]]; then
     ok "$EVENT_COUNT events already in memory"
 else
-    if [[ -f .claude/gchat-inbox.jsonl ]]; then
-        LINES=$(wc -l < .claude/gchat-inbox.jsonl | tr -d ' ')
-        info "$LINES chat messages found. Run ingestion with:"
-        info "  services/.venv/bin/python3 services/memory/ingest-chat-history.py"
-    else
-        info "No chat history yet. Start the listener: bash scripts/matrix-listener.py --daemon"
-    fi
+    info "No data yet. After setup, seed with:"
+    info "  services/.venv/bin/python3 scripts/seed-knowledge.py --source jira"
+    info "  services/.venv/bin/python3 scripts/seed-code.py"
 fi
 
-# ── 8. Summary ───────────────────────────────────────────────────
+# ── 9. Summary ───────────────────────────────────────────────────
 step "Setup complete"
 
 cat <<EOF
@@ -181,24 +195,23 @@ cat <<EOF
   ${BOLD}openkhang Digital Twin${NC}
   ━━━━━━━━━━━━━━━━━━━━━
 
+  ${CYAN}AI Dependencies (only 2):${NC}
+    Meridian (Claude Max)  → agent replies + memory extraction (Haiku 4.5)
+    OpenRouter API         → BGE-M3 embeddings (1024-dim)
+
   ${CYAN}Infrastructure:${NC}
-    Postgres + pgvector  → localhost:5433
-    Redis                → localhost:6379
-    Embeddings (bge-m3)  → OpenRouter API
+    Postgres + pgvector    → localhost:5433
+    Redis                  → localhost:6379
 
   ${CYAN}Commands:${NC}
-    Start dashboard:     bash scripts/run-dashboard.sh
-    Start chat listener: python3 scripts/matrix-listener.py --daemon
-    Ingest chat history: services/.venv/bin/python3 services/memory/ingest-chat-history.py
-    Run tests:           services/.venv/bin/python3 -m pytest services/agent/tests/ -v
+    Start dashboard:       bash scripts/run-dashboard.sh
+    Start chat listener:   python3 scripts/matrix-listener.py --daemon
+    Seed knowledge:        services/.venv/bin/python3 scripts/seed-knowledge.py --source jira
+    Run tests:             services/.venv/bin/python3 -m pytest services/agent/tests/ -v
+    Uninstall:             bash scripts/uninstall.sh
 
   ${CYAN}Dashboard:${NC}
     http://localhost:8000
-
-  ${CYAN}Configuration:${NC}
-    Persona:    config/persona.yaml
-    Thresholds: config/confidence_thresholds.yaml
-    Workflows:  config/workflows/
 
   ${CYAN}Documentation:${NC}
     README.md for full guide
