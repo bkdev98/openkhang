@@ -1,0 +1,13 @@
+# Confidence thresholds for auto-send decisions
+# Scale: 0.0 (never send) to 1.0 (always send)
+# Default is conservative — all spaces start in draft-only mode until manually graduated
+
+default_threshold: 0.85  # Conservative start: nearly all replies go to draft queue
+
+# Per-room overrides (lower threshold = more auto-sends after review period)
+# Graduation criteria: reviewed 20+ drafts for a space with >90% approval rate
+# Format: "!roomid:homeserver": 0.70
+graduated_spaces: {}
+  # Example after graduation:
+  # "!abc123:localhost": 0.70   # 1:1 DM with trusted colleague
+  # "!def456:localhost": 0.75   # small team channel

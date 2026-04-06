@@ -1,0 +1,329 @@
+"""Main agent pipeline: event → classify → RAG → prompt → LLM → route.
+
+AgentPipeline is the single entry point for processing any incoming event.
+It wires together Classifier, MemoryClient, PromptBuilder, LLMClient,
+ConfidenceScorer, DraftQueue, and MatrixSender.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from dataclasses import dataclass, field
+from typing import Optional
+
+from ..memory.client import MemoryClient
+from ..memory.config import MemoryConfig
+from .classifier import Classifier
+from .confidence import ConfidenceScorer
+from .draft_queue import DraftQueue
+from .llm_client import LLMClient, LLMResponse
+from .matrix_sender import MatrixSender
+from .prompt_builder import PromptBuilder
+
+logger = logging.getLogger(__name__)
+
+# Memory search limit for RAG context
+RAG_LIMIT = 10
+SENDER_CONTEXT_LIMIT = 5
+
+# Episodic event type for agent-sent messages
+EPISODIC_TYPE_AGENT_REPLY = "agent.reply.sent"
+EPISODIC_TYPE_DRAFT_QUEUED = "agent.reply.drafted"
+
+
+@dataclass
+class AgentResult:
+    """Result of processing one event through the pipeline."""
+
+    mode: str                          # 'outward' | 'inward'
+    intent: str                        # classified intent label
+    reply_text: str                    # generated reply
+    confidence: float                  # final confidence score (0.0–1.0)
+    action: str                        # 'auto_sent' | 'drafted' | 'inward_response' | 'error'
+    draft_id: Optional[str] = None     # set when action == 'drafted'
+    matrix_event_id: Optional[str] = None  # set when action == 'auto_sent'
+    error: Optional[str] = None        # set when action == 'error'
+    latency_ms: int = 0
+    tokens_used: int = 0
+
+
+class AgentPipeline:
+    """Main orchestrator: event → classify → RAG → prompt → LLM → route.
+
+    Usage:
+        pipeline = AgentPipeline.from_env()
+        await pipeline.connect()
+        result = await pipeline.process_event(event)
+        await pipeline.close()
+    """
+
+    def __init__(
+        self,
+        memory_client: MemoryClient,
+        llm_client: LLMClient,
+        draft_queue: DraftQueue,
+        matrix_sender: MatrixSender,
+    ) -> None:
+        self._memory = memory_client
+        self._llm = llm_client
+        self._drafts = draft_queue
+        self._sender = matrix_sender
+        self._classifier = Classifier()
+        self._prompt_builder = PromptBuilder()
+        self._scorer = ConfidenceScorer()
+
+    @classmethod
+    def from_env(cls) -> "AgentPipeline":
+        """Construct pipeline from environment variables.
+
+        Required env vars:
+            ANTHROPIC_API_KEY
+            MATRIX_HOMESERVER
+            MATRIX_ACCESS_TOKEN
+            OPENKHANG_DATABASE_URL  (defaults to localhost:5433)
+        """
+        config = MemoryConfig.from_env()
+        memory_client = MemoryClient(config)
+        llm_client = LLMClient(api_key=config.anthropic_api_key)
+        draft_queue = DraftQueue(database_url=config.database_url)
+        matrix_sender = MatrixSender(
+            homeserver=os.environ.get("MATRIX_HOMESERVER", "http://localhost:8008"),
+            access_token=os.environ.get("MATRIX_ACCESS_TOKEN", ""),
+        )
+        return cls(
+            memory_client=memory_client,
+            llm_client=llm_client,
+            draft_queue=draft_queue,
+            matrix_sender=matrix_sender,
+        )
+
+    async def connect(self) -> None:
+        """Initialise all backends. Must be called before process_event()."""
+        await self._memory.connect()
+        await self._drafts.connect()
+
+    async def close(self) -> None:
+        """Flush and close all connections."""
+        await self._memory.close()
+        await self._drafts.close()
+
+    async def process_event(self, event: dict) -> AgentResult:
+        """Process one incoming event through the full pipeline.
+
+        Args:
+            event: Dict with keys:
+                - body (str): message text
+                - source (str): 'matrix'|'chat'|'cli'|'dashboard'
+                - room_id (str, optional): Matrix room ID
+                - room_name (str, optional): human-readable room name
+                - sender_id (str, optional): sender identifier
+                - thread_event_id (str, optional): for threading replies
+                - event_id (str, optional): upstream event UUID
+
+        Returns:
+            AgentResult describing what happened.
+        """
+        import time
+        t0 = time.monotonic()
+
+        body = event.get("body", "").strip()
+        if not body:
+            return AgentResult(
+                mode="unknown", intent="unknown", reply_text="",
+                confidence=0.0, action="error", error="Empty event body",
+            )
+
+        try:
+            # Step 1: classify mode and intent
+            mode = self._classifier.classify_mode(event)
+            intent = self._classifier.classify_intent(body, mode)
+            has_deadline_risk = self._classifier.has_deadline_risk(body)
+
+            logger.debug("Event classified: mode=%s intent=%s deadline_risk=%s", mode, intent, has_deadline_risk)
+
+            # Step 2: RAG — search relevant memories
+            memories = await self._memory.search(
+                body,
+                agent_id=mode,
+                limit=RAG_LIMIT,
+            )
+
+            # Step 3: sender relationship context
+            sender_id = event.get("sender_id", "")
+            sender_context: list[dict] = []
+            if sender_id:
+                sender_context = await self._memory.get_related(
+                    sender_id,
+                    agent_id=mode,
+                )
+                sender_context = sender_context[:SENDER_CONTEXT_LIMIT]
+
+            sender_known = bool(sender_context)
+
+            # Step 4: build prompt
+            messages = self._prompt_builder.build(
+                mode=mode,
+                intent=intent,
+                memories=memories,
+                sender_context=sender_context,
+                event=event,
+            )
+
+            # Step 5: LLM call — lower temperature for outward (style consistency)
+            temperature = 0.3 if mode == "outward" else 0.5
+            llm_response: LLMResponse = await self._llm.generate(
+                messages=messages,
+                temperature=temperature,
+            )
+
+            # Step 6: confidence scoring
+            confidence = self._scorer.score(
+                llm_response=llm_response,
+                memories=memories,
+                event=event,
+                has_deadline_risk=has_deadline_risk,
+                sender_known=sender_known,
+            )
+
+            latency_ms = int((time.monotonic() - t0) * 1000)
+
+            # Step 7: route based on mode and confidence
+            result = await self._route(
+                event=event,
+                mode=mode,
+                intent=intent,
+                reply_text=llm_response.text,
+                confidence=confidence,
+                evidence=llm_response.evidence,
+                latency_ms=latency_ms,
+                tokens_used=llm_response.tokens_used,
+            )
+
+            # Step 8: log to episodic store
+            await self._log_event(event, result)
+
+            return result
+
+        except Exception as exc:
+            logger.exception("Pipeline error processing event: %s", exc)
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            return AgentResult(
+                mode="unknown",
+                intent="unknown",
+                reply_text="",
+                confidence=0.0,
+                action="error",
+                error=str(exc),
+                latency_ms=latency_ms,
+            )
+
+    # ------------------------------------------------------------------
+    # Routing logic
+    # ------------------------------------------------------------------
+
+    async def _route(
+        self,
+        event: dict,
+        mode: str,
+        intent: str,
+        reply_text: str,
+        confidence: float,
+        evidence: list[str],
+        latency_ms: int,
+        tokens_used: int,
+    ) -> AgentResult:
+        """Decide whether to auto-send, draft, or return inward response."""
+
+        # Inward mode: always return directly to caller (no Matrix send)
+        if mode == "inward":
+            return AgentResult(
+                mode=mode,
+                intent=intent,
+                reply_text=reply_text,
+                confidence=confidence,
+                action="inward_response",
+                latency_ms=latency_ms,
+                tokens_used=tokens_used,
+            )
+
+        # Outward mode: check confidence threshold for this room
+        room_id = event.get("room_id", "")
+
+        if self._scorer.should_auto_send(confidence, room_id):
+            # Auto-send via Matrix
+            try:
+                matrix_event_id = await self._sender.send(
+                    room_id=room_id,
+                    text=reply_text,
+                    thread_event_id=event.get("thread_event_id"),
+                )
+                return AgentResult(
+                    mode=mode,
+                    intent=intent,
+                    reply_text=reply_text,
+                    confidence=confidence,
+                    action="auto_sent",
+                    matrix_event_id=matrix_event_id,
+                    latency_ms=latency_ms,
+                    tokens_used=tokens_used,
+                )
+            except RuntimeError as exc:
+                # Rate limit or send failure — fall through to draft queue
+                logger.warning("Auto-send failed (%s), falling back to draft queue", exc)
+
+        # Store as draft for human review
+        draft_id = await self._drafts.add_draft(
+            room_id=room_id,
+            original_message=event.get("body", ""),
+            draft_text=reply_text,
+            confidence=confidence,
+            evidence=evidence,
+            room_name=event.get("room_name", ""),
+            event_id=event.get("event_id"),
+        )
+        return AgentResult(
+            mode=mode,
+            intent=intent,
+            reply_text=reply_text,
+            confidence=confidence,
+            action="drafted",
+            draft_id=draft_id,
+            latency_ms=latency_ms,
+            tokens_used=tokens_used,
+        )
+
+    # ------------------------------------------------------------------
+    # Episodic logging
+    # ------------------------------------------------------------------
+
+    async def _log_event(self, event: dict, result: AgentResult) -> None:
+        """Append agent action to the episodic store (audit trail)."""
+        try:
+            event_type = (
+                EPISODIC_TYPE_AGENT_REPLY if result.action == "auto_sent"
+                else EPISODIC_TYPE_DRAFT_QUEUED
+            )
+            await self._memory.add_event(
+                source="agent",
+                event_type=event_type,
+                actor="agent",
+                payload={
+                    "mode": result.mode,
+                    "intent": result.intent,
+                    "reply_text": result.reply_text,
+                    "confidence": result.confidence,
+                    "action": result.action,
+                    "draft_id": result.draft_id,
+                    "matrix_event_id": result.matrix_event_id,
+                    "room_id": event.get("room_id", ""),
+                    "original_body": event.get("body", "")[:500],  # truncate for storage
+                },
+                metadata={
+                    "latency_ms": result.latency_ms,
+                    "tokens_used": result.tokens_used,
+                },
+            )
+        except Exception as exc:
+            # Logging failure must never break the pipeline
+            logger.warning("Failed to log agent event to episodic store: %s", exc)

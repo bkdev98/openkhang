@@ -169,14 +169,38 @@ def parse_message(event, room_id, room_name):
     }
 
 
-def append_to_inbox(messages):
-    """Append messages to the inbox JSONL file."""
+def _redis_publish(messages, redis_url):
+    """Publish messages to Redis openkhang:events channel (best-effort).
+
+    Non-blocking: if Redis is unavailable or redis package missing,
+    logs a warning and returns without raising.
+    """
+    try:
+        import redis  # type: ignore[import]
+    except ImportError:
+        return  # redis package not installed — skip silently
+
+    try:
+        client = redis.from_url(redis_url, socket_connect_timeout=2, socket_timeout=2)
+        for msg in messages:
+            payload = json.dumps({"type": "chat_message", "payload": msg}, ensure_ascii=False)
+            client.publish("openkhang:events", payload)
+        client.close()
+    except Exception as exc:
+        print(f"[listener] Redis publish warning (non-fatal): {exc}", flush=True)
+
+
+def append_to_inbox(messages, redis_url=None):
+    """Append messages to the inbox JSONL file and publish to Redis."""
     if not messages:
         return
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     with open(INBOX_FILE, "a") as f:
         for msg in messages:
             f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+    # Publish to Redis for realtime ingestion pipeline (non-breaking)
+    if redis_url:
+        _redis_publish(messages, redis_url)
 
 
 def load_since_token():
@@ -192,7 +216,7 @@ def save_since_token(token):
     SINCE_FILE.write_text(token)
 
 
-def sync_loop(hs, token, own_puppet_prefix):
+def sync_loop(hs, token, own_puppet_prefix, redis_url=None):
     """Main sync loop — long-polls Matrix for new events."""
     since = load_since_token()
     room_names = {}
@@ -278,7 +302,7 @@ def sync_loop(hs, token, own_puppet_prefix):
                     new_messages.append(msg)
 
             if new_messages:
-                append_to_inbox(new_messages)
+                append_to_inbox(new_messages, redis_url=redis_url)
                 for msg in new_messages:
                     name = msg["room_name"] or msg["room_id"]
                     body_preview = msg["body"][:80]
@@ -363,10 +387,12 @@ def main():
                 own_puppet = f"@googlechat_{uid}:"
                 break
 
+    redis_url = env.get("OPENKHANG_REDIS_URL", "redis://localhost:6379")
+
     if "--daemon" in sys.argv:
         daemonize()
 
-    sync_loop(hs, token, own_puppet)
+    sync_loop(hs, token, own_puppet, redis_url=redis_url)
 
 
 if __name__ == "__main__":

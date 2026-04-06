@@ -41,5 +41,13 @@ CREATE TABLE IF NOT EXISTS draft_replies (
 CREATE INDEX IF NOT EXISTS idx_drafts_status ON draft_replies(status);
 CREATE INDEX IF NOT EXISTS idx_drafts_room   ON draft_replies(room_id);
 
+-- Ingestion sync state — tracks last successful sync per source
+-- Sources: 'chat' | 'jira' | 'gitlab' | 'confluence'
+CREATE TABLE IF NOT EXISTS sync_state (
+    source          VARCHAR(50)  PRIMARY KEY,
+    last_synced_at  TIMESTAMPTZ  DEFAULT NOW(),
+    item_count      INTEGER      DEFAULT 0
+);
+
 -- Note: Mem0 creates its own tables (mem0_memories, etc.) automatically
 -- when Memory() is first initialised. pgvector extension above is sufficient.
