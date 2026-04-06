@@ -19,6 +19,7 @@ class MemoryConfig:
     ollama_base_url: str
     embedding_model: str
     anthropic_api_key: str
+    gemini_api_key: str = ""
 
     # Mem0 collection stored in pgvector
     mem0_collection: str = "openkhang_memories"
@@ -37,11 +38,13 @@ class MemoryConfig:
         }
 
         anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
-        if not anthropic_key:
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+
+        if not anthropic_key and not gemini_key:
             raise ValueError(
-                "ANTHROPIC_API_KEY is not set. "
-                "Mem0 needs it for memory extraction (LLM call). "
-                "Add it to your .env file."
+                "Neither ANTHROPIC_API_KEY nor GEMINI_API_KEY is set. "
+                "Mem0 needs one for memory extraction (LLM call). "
+                "Add at least one to your .env file."
             )
 
         return cls(
@@ -50,6 +53,7 @@ class MemoryConfig:
             ollama_base_url=required["OLLAMA_BASE_URL"],
             embedding_model=required["EMBEDDING_MODEL"],
             anthropic_api_key=anthropic_key,
+            gemini_api_key=gemini_key,
         )
 
     def as_mem0_config(self) -> dict:
@@ -83,12 +87,24 @@ class MemoryConfig:
                     "embedding_dims": 1024,
                 },
             },
-            "llm": {
-                "provider": "anthropic",
-                "config": {
-                    "model": "claude-sonnet-4-20250514",
-                    "api_key": self.anthropic_api_key,
-                },
-            },
+            "llm": self._llm_config(),
             "version": "v1.1",
+        }
+
+    def _llm_config(self) -> dict:
+        """Pick LLM provider: prefer Gemini (higher rate limits) for memory extraction."""
+        if self.gemini_api_key:
+            return {
+                "provider": "gemini",
+                "config": {
+                    "model": "gemini-2.5-flash",
+                    "api_key": self.gemini_api_key,
+                },
+            }
+        return {
+            "provider": "anthropic",
+            "config": {
+                "model": "claude-sonnet-4-20250514",
+                "api_key": self.anthropic_api_key,
+            },
         }

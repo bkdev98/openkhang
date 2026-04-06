@@ -1,0 +1,29 @@
+# Projects that openkhang has access to for code search and implementation
+# These paths are used by the code ingestor and agent pipeline
+
+projects:
+  momo-app:
+    path: ~/Projects/momo-app
+    language: kotlin
+    description: "MoMo App Platform — Kotlin Multiplatform Compose"
+    # Only index Khanh's owned modules (not entire monorepo)
+    include_paths:
+      - packages/momo-compose/MoMoCompose/src/commonMain/kotlin/vn/momo/compose/transactionhistory
+      - packages/momo-compose/MoMoCompose/src/commonMain/kotlin/vn/momo/compose/payment/promotion
+    extensions: [".kt"]
+
+  transactionhistory:
+    path: ~/Projects/transactionhistory
+    language: kotlin/typescript
+    description: "Mini App Transaction History"
+    include_paths: []  # index everything
+    extensions: [".kt", ".ts", ".tsx"]
+    exclude_patterns: ["node_modules", "build", "dist", ".gradle"]
+
+  expense:
+    path: ~/Projects/expense
+    language: kotlin/typescript
+    description: "Mini App Expense Management"
+    include_paths: []  # index everything
+    extensions: [".kt", ".ts", ".tsx"]
+    exclude_patterns: ["node_modules", "build", "dist", ".gradle"]

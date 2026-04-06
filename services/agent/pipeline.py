@@ -152,6 +152,22 @@ class AgentPipeline:
                 limit=RAG_LIMIT,
             )
 
+            # Step 2b: if question mentions code/logic, also search code memories
+            code_keywords = ["code", "logic", "function", "class", "implement",
+                             "api", "endpoint", "bug", "fix", "error", "crash",
+                             "build", "pipeline", "method", "screen", "view",
+                             "model", "repository", "service", "compose"]
+            body_lower = body.lower()
+            if any(kw in body_lower for kw in code_keywords):
+                code_memories = await self._memory.search(
+                    body, agent_id="inward", limit=5,
+                )
+                # Merge without duplicates
+                seen_ids = {m.get("id") for m in memories}
+                for cm in code_memories:
+                    if cm.get("id") not in seen_ids:
+                        memories.append(cm)
+
             # Step 3: sender relationship context
             sender_id = event.get("sender_id", "")
             sender_context: list[dict] = []
