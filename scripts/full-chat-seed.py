@@ -29,7 +29,7 @@ from services.memory.config import MemoryConfig
 from services.memory.client import MemoryClient
 
 
-def matrix_api(method: str, path: str, hs: str, token: str, timeout: int = 15) -> dict:
+def matrix_api(method: str, path: str, hs: str, token: str, timeout: int = 30) -> dict:
     url = f"{hs}/_matrix/client/v3{path}"
     req = urllib.request.Request(url, method=method)
     req.add_header("Authorization", f"Bearer {token}")
@@ -140,45 +140,49 @@ async def main():
     addressing = defaultdict(list)
 
     for i, rid in enumerate(room_ids):
-        rname = get_room_name(hs, token, rid)
-        label = rname or rid[:30]
-        print(f"[{i+1}/{len(room_ids)}] {label}...", end=" ", flush=True)
+        try:
+            rname = get_room_name(hs, token, rid)
+            label = rname or rid[:30]
+            print(f"[{i+1}/{len(room_ids)}] {label}...", end=" ", flush=True)
 
-        events = fetch_all_room_messages(hs, token, rid)
-        print(f"{len(events)} messages")
+            events = fetch_all_room_messages(hs, token, rid)
+            print(f"{len(events)} messages")
 
-        own_in_room = 0
-        for event in events:
-            sender = event.get("sender", "")
-            body = event.get("content", {}).get("body", "")
-            if not body or len(body) < 2:
-                continue
+            own_in_room = 0
+            for event in events:
+                sender = event.get("sender", "")
+                body = event.get("content", {}).get("body", "")
+                if not body or len(body) < 2:
+                    continue
 
-            is_own = sender.startswith(own_prefix)
+                is_own = sender.startswith(own_prefix)
 
-            if is_own:
-                all_own_messages.append({
-                    "body": body,
-                    "room_id": rid,
+                if is_own:
+                    all_own_messages.append({
+                        "body": body,
+                        "room_id": rid,
+                        "room_name": rname,
+                        "sender": sender,
+                        "timestamp": event.get("origin_server_ts", 0),
+                        "event_id": event.get("event_id", ""),
+                        "raw_content": event.get("content", {}),
+                    })
+                    own_in_room += 1
+
+                # Store conversation pairs for context
+                all_conversations.append({
                     "room_name": rname,
                     "sender": sender,
+                    "body": body,
+                    "is_own": is_own,
                     "timestamp": event.get("origin_server_ts", 0),
-                    "event_id": event.get("event_id", ""),
-                    "raw_content": event.get("content", {}),
                 })
-                own_in_room += 1
 
-            # Store conversation pairs for context
-            all_conversations.append({
-                "room_name": rname,
-                "sender": sender,
-                "body": body,
-                "is_own": is_own,
-                "timestamp": event.get("origin_server_ts", 0),
-            })
-
-        if own_in_room:
-            print(f"    → {own_in_room} of your messages")
+            if own_in_room:
+                print(f"    → {own_in_room} of your messages")
+        except Exception as exc:
+            print(f"\n    [ERROR] Room {rid[:30]} failed: {exc}")
+            continue
 
     # ── Save style examples ──
     print(f"\n{'='*50}")
