@@ -157,6 +157,12 @@ class DashboardServices:
         self._require_pool()
         try:
             if since:
+                # asyncpg needs datetime, not ISO string
+                from datetime import datetime, timezone
+                if isinstance(since, str):
+                    since_dt = datetime.fromisoformat(since)
+                else:
+                    since_dt = since
                 rows = await self._pool.fetch(  # type: ignore[union-attr]
                     """
                     SELECT id, source, event_type, actor, payload, created_at
@@ -164,7 +170,7 @@ class DashboardServices:
                     WHERE created_at > $1
                     ORDER BY created_at DESC LIMIT $2
                     """,
-                    since,
+                    since_dt,
                     limit,
                 )
             else:
