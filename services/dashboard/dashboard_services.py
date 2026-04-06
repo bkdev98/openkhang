@@ -211,9 +211,9 @@ class DashboardServices:
     # Inward chat
     # ------------------------------------------------------------------
 
-    async def ask_twin(self, question: str) -> dict[str, Any]:
+    async def ask_twin(self, question: str, session_id: str = "default") -> dict[str, Any]:
         """Delegate to twin_chat module (keeps heavy pipeline import isolated)."""
-        return await _ask_twin(question)
+        return await _ask_twin(question, session_id=session_id)
 
     # ------------------------------------------------------------------
     # Private helpers

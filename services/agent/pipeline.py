@@ -114,7 +114,9 @@ class AgentPipeline:
         await self._memory.close()
         await self._drafts.close()
 
-    async def process_event(self, event: dict) -> AgentResult:
+    async def process_event(
+        self, event: dict, chat_history: list[dict] | None = None,
+    ) -> AgentResult:
         """Process one incoming event through the full pipeline.
 
         Args:
@@ -126,6 +128,8 @@ class AgentPipeline:
                 - sender_id (str, optional): sender identifier
                 - thread_event_id (str, optional): for threading replies
                 - event_id (str, optional): upstream event UUID
+            chat_history: Optional prior conversation turns for inward mode.
+                Each entry: {"role": "user"|"assistant", "content": str}.
 
         Returns:
             AgentResult describing what happened.
@@ -231,6 +235,16 @@ class AgentPipeline:
                 except Exception:
                     has_history_in_room = True  # fail-open
 
+            # Step 3c: fetch recent room messages for outward conversation context
+            room_messages: list[dict] = []
+            if mode == "outward" and room_id:
+                try:
+                    room_messages = await self._memory.get_room_messages(
+                        room_id, limit=30,
+                    )
+                except Exception:
+                    pass  # fail-open: no room history is non-fatal
+
             # Step 4: build prompt (inject style examples for outward mode)
             messages = self._prompt_builder.build(
                 mode=mode,
@@ -239,6 +253,8 @@ class AgentPipeline:
                 sender_context=sender_context,
                 event=event,
                 style_examples=self._style_examples if mode == "outward" else None,
+                chat_history=chat_history if mode == "inward" else None,
+                room_messages=room_messages if mode == "outward" else None,
             )
 
             # Step 5: LLM call

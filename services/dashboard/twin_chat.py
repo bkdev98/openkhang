@@ -11,7 +11,15 @@ import logging
 import re
 from typing import Any
 
+from ..memory.working import WorkingMemory
+
 logger = logging.getLogger(__name__)
+
+# Shared working memory instance for inward chat sessions (no TTL — persists until restart)
+_working_memory = WorkingMemory(ttl_seconds=0)
+
+# Max conversation turns to keep per session (1 turn = user + assistant)
+_MAX_HISTORY_TURNS = 10
 
 # Patterns that indicate a send-message instruction
 _SEND_PATTERNS = re.compile(
@@ -26,14 +34,18 @@ _TARGET_RE = re.compile(
 )
 
 
-async def ask_twin(question: str) -> dict[str, Any]:
+async def ask_twin(question: str, session_id: str = "default") -> dict[str, Any]:
     """Process an inward-mode question through the agent pipeline.
 
+    Maintains conversation history per session_id using WorkingMemory.
     If the question is an action instruction (send message, etc.),
     executes the action after getting the LLM's composed message.
     """
     # Check if this is a send-message instruction
     is_send_action = bool(_SEND_PATTERNS.search(question))
+
+    # Retrieve prior conversation turns for this session
+    chat_history: list[dict] = _working_memory.get_context(session_id, "chat_history") or []
 
     try:
         from ..agent.pipeline import AgentPipeline
@@ -46,12 +58,15 @@ async def ask_twin(question: str) -> dict[str, Any]:
             if is_send_action:
                 enriched_question = await _enrich_with_context(question)
 
-            result = await pipeline.process_event({
-                "body": enriched_question,
-                "source": "dashboard",
-                "sender_id": "dashboard_user",
-                "mode_hint": "inward",
-            })
+            result = await pipeline.process_event(
+                {
+                    "body": enriched_question,
+                    "source": "dashboard",
+                    "sender_id": "dashboard_user",
+                    "mode_hint": "inward",
+                },
+                chat_history=chat_history,
+            )
 
             reply_text = result.reply_text or ""
             action_result = None
@@ -59,6 +74,15 @@ async def ask_twin(question: str) -> dict[str, Any]:
             # If this was a send instruction and we got a reply, try to execute
             if is_send_action and reply_text:
                 action_result = await _execute_send_action(question, reply_text, pipeline)
+
+            # Store this turn in session history
+            if reply_text:
+                chat_history.append({"role": "user", "content": question})
+                chat_history.append({"role": "assistant", "content": reply_text})
+                # Trim to max turns (each turn = 2 messages)
+                if len(chat_history) > _MAX_HISTORY_TURNS * 2:
+                    chat_history = chat_history[-_MAX_HISTORY_TURNS * 2:]
+                _working_memory.set_context(session_id, "chat_history", chat_history)
 
             return {
                 "reply_text": reply_text,

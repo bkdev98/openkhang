@@ -39,6 +39,8 @@ class PromptBuilder:
         sender_context: list[dict],
         event: dict,
         style_examples: Optional[list[dict]] = None,
+        chat_history: Optional[list[dict]] = None,
+        room_messages: Optional[list[dict]] = None,
     ) -> list[dict]:
         """Build messages list for LLM call.
 
@@ -50,21 +52,32 @@ class PromptBuilder:
             event: The original event dict (must have 'body', optionally 'sender_id',
                    'room_name', 'thread_event_id').
             style_examples: Optional few-shot examples for outward mode.
+            chat_history: Optional prior conversation turns for inward mode.
+                Each entry: {"role": "user"|"assistant", "content": str}.
+            room_messages: Optional recent room messages for outward mode context.
+                Each entry: {"sender": str, "body": str, "created_at": str}.
 
         Returns:
             List of {role, content} dicts ready for LLMClient.generate().
         """
         if mode == "outward":
-            system = self._build_outward_system(memories, sender_context, style_examples)
+            system = self._build_outward_system(memories, sender_context, style_examples, room_messages)
         else:
             system = self._build_inward_system(memories, sender_context)
 
         user_content = self._build_user_message(event, intent, mode)
 
-        return [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_content},
-        ]
+        messages = [{"role": "system", "content": system}]
+
+        # Inject prior conversation turns (inward mode session history)
+        # Only allow user/assistant roles to prevent system prompt injection
+        if chat_history:
+            for turn in chat_history:
+                if turn.get("role") in ("user", "assistant"):
+                    messages.append(turn)
+
+        messages.append({"role": "user", "content": user_content})
+        return messages
 
     # ------------------------------------------------------------------
     # System prompt builders
@@ -75,6 +88,7 @@ class PromptBuilder:
         memories: list[dict],
         sender_context: list[dict],
         style_examples: Optional[list[dict]],
+        room_messages: Optional[list[dict]] = None,
     ) -> str:
         template = self._load_outward_template()
         persona_block = self._format_persona()
@@ -82,6 +96,7 @@ class PromptBuilder:
         context_block = self._format_memories(memories, label="Relevant context")
         sender_block = self._format_memories(sender_context, label="About this person")
         style_block = self._format_style_examples(style_examples)
+        room_block = self._format_room_messages(room_messages)
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
         parts = [template]
@@ -90,6 +105,8 @@ class PromptBuilder:
         parts.append(f"\n## Current time\n{now}")
         if style_block:
             parts.append(style_block)
+        if room_block:
+            parts.append(room_block)
         if context_block:
             parts.append(context_block)
         if sender_block:
@@ -156,6 +173,24 @@ class PromptBuilder:
             score = item.get("score", 0.0)
             lines.append(f"- [{score:.2f}] {mem_text}")
         lines.append("</context>")
+        return "\n".join(lines)
+
+    def _format_room_messages(self, messages: Optional[list[dict]]) -> str:
+        """Format recent room messages as conversation history block."""
+        if not messages:
+            return ""
+
+        lines = ["## Recent conversation in this room (oldest → newest)\n<conversation>"]
+        for msg in messages:
+            sender = msg.get("sender", "unknown")
+            # Clean up bridge sender IDs for readability
+            if sender.startswith("@googlechat_"):
+                sender = sender.split(":")[0].replace("@googlechat_", "")
+            if sender.isdigit():
+                sender = "colleague"
+            body = (msg.get("body", ""))[:200]  # truncate long messages
+            lines.append(f"- {sender}: {body}")
+        lines.append("</conversation>")
         return "\n".join(lines)
 
     def _format_persona(self) -> str:

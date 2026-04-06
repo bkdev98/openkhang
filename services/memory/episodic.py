@@ -181,6 +181,45 @@ class EpisodicStore:
             for r in rows
         ]
 
+    async def get_room_messages(
+        self,
+        room_id: str,
+        limit: int = 30,
+    ) -> list[dict[str, Any]]:
+        """Fetch recent chat messages for a specific room.
+
+        Searches both metadata->>'room_id' and payload->>'room_id'.
+        Returns messages in chronological order (oldest first).
+        """
+        if self._pool is None:
+            raise RuntimeError("EpisodicStore.connect() was not called")
+
+        limit = min(limit, 100)
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT payload, metadata, created_at
+                FROM events
+                WHERE source = 'chat'
+                  AND (metadata->>'room_id' = $1 OR payload->>'room_id' = $1)
+                ORDER BY created_at DESC
+                LIMIT $2
+                """,
+                room_id,
+                limit,
+            )
+
+        # Return in chronological order (oldest first)
+        return [
+            {
+                "sender": json.loads(r["payload"]).get("sender", json.loads(r["payload"]).get("sender_id", "")),
+                "body": json.loads(r["payload"]).get("body", ""),
+                "created_at": r["created_at"].isoformat(),
+            }
+            for r in reversed(rows)
+            if json.loads(r["payload"]).get("body", "").strip()
+        ]
+
     async def search_code(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         """Full-text search across indexed code chunks using ILIKE.
 

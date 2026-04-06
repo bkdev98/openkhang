@@ -86,4 +86,6 @@ class WorkingMemory:
     # ------------------------------------------------------------------
 
     def _is_expired(self, entry: dict[str, Any]) -> bool:
+        if self._ttl <= 0:
+            return False  # TTL disabled — sessions never expire
         return (time.monotonic() - entry["last_access"]) > self._ttl

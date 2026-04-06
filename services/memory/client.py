@@ -225,6 +225,14 @@ class MemoryClient:
             limit=limit,
         )
 
+    async def get_room_messages(
+        self,
+        room_id: str,
+        limit: int = 30,
+    ) -> list[dict]:
+        """Fetch recent chat messages for a room (chronological order)."""
+        return await self._episodic.get_room_messages(room_id, limit=limit)
+
     async def search_code(self, query: str, limit: int = 20) -> list[dict]:
         """Full-text search across indexed code chunks."""
         return await self._episodic.search_code(query, limit=limit)

@@ -315,15 +315,26 @@ async def telegram_webhook(request: Request):
 
 @app.post("/api/chat", response_class=HTMLResponse)
 async def chat(request: Request, question: str = Form(...)):
-    """Process inward-mode question through agent pipeline."""
+    """Process inward-mode question through agent pipeline with session history."""
+    import uuid
+
     question = question.strip()
     if not question:
         return HTMLResponse('<p class="text-yellow-400 text-sm">Please enter a question.</p>')
+
+    # Get or create session ID from cookie
+    session_id = request.cookies.get("twin_session_id", "")
+    if not session_id:
+        session_id = str(uuid.uuid4())
+
     try:
-        result = await svc().ask_twin(question)
+        result = await svc().ask_twin(question, session_id=session_id)
     except Exception as exc:
         return HTMLResponse(
             f'<p class="text-red-400 text-sm">Error: {exc}</p>',
             status_code=500,
         )
-    return templates.TemplateResponse(request, "partials/chat_input.html", {"result": result, "question": question})
+    response = templates.TemplateResponse(request, "partials/chat_input.html", {"result": result, "question": question})
+    # Set session cookie (expires with browser session, refreshed on each request)
+    response.set_cookie("twin_session_id", session_id, httponly=True, samesite="lax")
+    return response
