@@ -97,10 +97,12 @@ async def run_agent_relay(pool: asyncpg.Pool) -> None:
                 if "bot" in sender_id.lower():
                     continue
 
+                sender_name = payload.get("sender_id", sender_id)
                 event = {
                     "source": "matrix",
                     "body": body,
-                    "sender": payload.get("sender_id", sender_id),
+                    "sender": sender_name,
+                    "sender_id": sender_name,  # pipeline reads sender_id
                     "room_id": payload.get("room_id", metadata.get("room_id", "")),
                     "room_name": payload.get("room_name", metadata.get("room_name", "")),
                     "event_id": str(row["id"]),

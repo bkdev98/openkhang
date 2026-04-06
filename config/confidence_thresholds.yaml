@@ -2,7 +2,7 @@
 # Scale: 0.0 (never send) to 1.0 (always send)
 # Default is conservative — all spaces start in draft-only mode until manually graduated
 
-default_threshold: 0.85  # Conservative start: nearly all replies go to draft queue
+default_threshold: 0.75  # Social/greeting auto-reply; complex questions go to draft
 
 # Per-room overrides (lower threshold = more auto-sends after review period)
 # Graduation criteria: reviewed 20+ drafts for a space with >90% approval rate

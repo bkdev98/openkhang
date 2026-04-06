@@ -61,7 +61,7 @@ class AuditLog:
             """
             INSERT INTO audit_log
                 (workflow_id, action_type, tier, params, result, approved_by)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
             RETURNING id
             """,
             UUID(workflow_id),

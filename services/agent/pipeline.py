@@ -184,6 +184,7 @@ class AgentPipeline:
                 event=event,
                 has_deadline_risk=has_deadline_risk,
                 sender_known=sender_known,
+                intent=intent,
             )
 
             latency_ms = int((time.monotonic() - t0) * 1000)

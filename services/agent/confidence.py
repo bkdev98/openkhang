@@ -22,8 +22,9 @@ CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "confidence_thres
 # Confidence modifiers applied on top of LLM self-assessed score
 MODIFIER_MANY_MEMORIES = +0.10     # 3+ relevant memories found
 MODIFIER_DEADLINE_RISK = -0.20     # message asks about timeline/deadline
-MODIFIER_UNKNOWN_SENDER = -0.30    # no prior interactions with this sender
+MODIFIER_UNKNOWN_SENDER = -0.15    # no prior interactions (reduced from -0.30)
 MODIFIER_LANGUAGE_MISMATCH = -0.10 # message language differs from persona primary
+MODIFIER_SOCIAL_INTENT = +0.25     # social messages (hi, thanks, emoji) are low-risk
 
 
 class ConfidenceScorer:
@@ -43,6 +44,7 @@ class ConfidenceScorer:
         event: dict,
         has_deadline_risk: bool = False,
         sender_known: bool = True,
+        intent: str = "",
     ) -> float:
         """Compute final confidence score for a generated reply.
 
@@ -69,6 +71,10 @@ class ConfidenceScorer:
         # Penalty: sender is unknown (higher risk of misrepresentation)
         if not sender_known:
             base += MODIFIER_UNKNOWN_SENDER
+
+        # Bonus: social/greeting messages are low-risk and should auto-reply
+        if intent in ("social", "fyi"):
+            base += MODIFIER_SOCIAL_INTENT
 
         # Penalty: detected language mismatch (crude heuristic)
         if self._language_mismatch(event.get("body", "")):

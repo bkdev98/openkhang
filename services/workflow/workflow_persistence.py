@@ -50,7 +50,7 @@ class WorkflowPersistence:
             INSERT INTO workflow_instances
                 (id, workflow_name, current_state, context, trigger_event,
                  status, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8)
             ON CONFLICT (id) DO UPDATE SET
                 current_state = EXCLUDED.current_state,
                 context       = EXCLUDED.context,
