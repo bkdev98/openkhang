@@ -128,9 +128,9 @@ class DashboardServices:
                 SELECT
                     (SELECT COUNT(*) FROM draft_replies WHERE status = 'pending')
                         AS pending_drafts,
-                    (SELECT COUNT(*) FROM episodic_events)
+                    (SELECT COUNT(*) FROM events)
                         AS total_events,
-                    (SELECT COUNT(*) FROM episodic_events
+                    (SELECT COUNT(*) FROM events
                      WHERE created_at >= NOW() - INTERVAL '24 hours')
                         AS events_today,
                     (SELECT COUNT(*) FROM draft_replies
@@ -160,7 +160,7 @@ class DashboardServices:
                 rows = await self._pool.fetch(  # type: ignore[union-attr]
                     """
                     SELECT id, source, event_type, actor, payload, created_at
-                    FROM episodic_events
+                    FROM events
                     WHERE created_at > $1
                     ORDER BY created_at DESC LIMIT $2
                     """,
@@ -171,7 +171,7 @@ class DashboardServices:
                 rows = await self._pool.fetch(  # type: ignore[union-attr]
                     """
                     SELECT id, source, event_type, actor, payload, created_at
-                    FROM episodic_events
+                    FROM events
                     ORDER BY created_at DESC LIMIT $1
                     """,
                     limit,
