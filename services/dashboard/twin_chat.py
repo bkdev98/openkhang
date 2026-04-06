@@ -41,8 +41,13 @@ async def ask_twin(question: str) -> dict[str, Any]:
         pipeline = AgentPipeline.from_env()
         await pipeline.connect()
         try:
+            # If send action, enrich question with target person context
+            enriched_question = question
+            if is_send_action:
+                enriched_question = await _enrich_with_context(question)
+
             result = await pipeline.process_event({
-                "body": question,
+                "body": enriched_question,
                 "source": "dashboard",
                 "sender_id": "dashboard_user",
                 "mode_hint": "inward",
@@ -124,6 +129,62 @@ async def _execute_send_action(
     except Exception as exc:
         logger.error("twin_chat: send failed: %s", exc)
         return {"success": False, "error": str(exc)}
+
+
+async def _enrich_with_context(instruction: str) -> str:
+    """Add conversation context for the target person to the instruction.
+
+    Looks up the person, fetches recent messages from their DM room,
+    and appends context so the LLM can use correct xưng hô and topic.
+    """
+    from ..agent.room_lookup import find_room_by_person
+
+    target_match = _TARGET_RE.search(instruction)
+    if not target_match:
+        return instruction
+
+    target_name = target_match.group(1).strip().rstrip(".,!?")
+    room = await find_room_by_person(target_name)
+    if not room:
+        return instruction
+
+    # Fetch recent messages from this room for context
+    import asyncpg
+    import os
+    db_url = os.getenv(
+        "OPENKHANG_DATABASE_URL",
+        "postgresql://openkhang:openkhang@localhost:5433/openkhang",
+    )
+    try:
+        conn = await asyncpg.connect(db_url)
+        rows = await conn.fetch(
+            """
+            SELECT payload->>'sender' as sender, payload->>'body' as body
+            FROM events
+            WHERE source = 'chat'
+              AND (metadata->>'room_id' = $1 OR payload->>'room_id' = $1)
+            ORDER BY created_at DESC
+            LIMIT 5
+            """,
+            room["room_id"],
+        )
+        await conn.close()
+    except Exception:
+        return instruction
+
+    if not rows:
+        return f"{instruction}\n\n[Target: {room['display_name']}. No recent conversation history.]"
+
+    # Build context block
+    context_lines = [f"\n\n[Target: {room['display_name']}]"]
+    context_lines.append("[Recent conversation in this DM (newest first):]")
+    for r in rows:
+        sender = "You" if "claude" in (r["sender"] or "") else room["display_name"].split(" - ")[0]
+        body = (r["body"] or "")[:100]
+        context_lines.append(f"  {sender}: {body}")
+    context_lines.append("[Use appropriate xưng hô based on this context.]")
+
+    return instruction + "\n".join(context_lines)
 
 
 def _extract_composed_message(llm_reply: str) -> str | None:

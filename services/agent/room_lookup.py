@@ -96,13 +96,20 @@ async def find_room_by_person(name: str) -> Optional[dict[str, str]]:
 
             dn_normalized = _strip_diacritics(display_name)
 
-            # Score: how many query parts match the display name
-            score = sum(1 for part in query_parts if part in dn_normalized)
+            # Count matching query parts
+            matched_parts = sum(1 for part in query_parts if part in dn_normalized)
+            # Require ALL query parts to match (avoid "nguyen" matching everyone)
+            if len(query_parts) > 1 and matched_parts < len(query_parts):
+                continue
+            if matched_parts == 0:
+                continue
+
+            score = matched_parts
             # Bonus for exact substring match
             if query in dn_normalized:
                 score += 2
             # Prefer DM rooms over group rooms
-            if is_dm and score > 0:
+            if is_dm:
                 score += 3
 
             if score > best_score:
