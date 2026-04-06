@@ -225,6 +225,10 @@ class MemoryClient:
             limit=limit,
         )
 
+    async def search_code(self, query: str, limit: int = 20) -> list[dict]:
+        """Full-text search across indexed code chunks."""
+        return await self._episodic.search_code(query, limit=limit)
+
     # ------------------------------------------------------------------
     # Working memory
     # ------------------------------------------------------------------

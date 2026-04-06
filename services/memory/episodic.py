@@ -181,6 +181,64 @@ class EpisodicStore:
             for r in rows
         ]
 
+    async def search_code(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        """Full-text search across indexed code chunks using ILIKE.
+
+        Uses OR logic — any keyword match counts. Results ranked by match count.
+        Also searches file paths and chunk labels in metadata.
+        """
+        if self._pool is None:
+            raise RuntimeError("EpisodicStore.connect() was not called")
+
+        # Split query into meaningful keywords (3+ chars), skip Vietnamese stop words
+        stop_words = {"của", "cho", "trong", "với", "this", "that", "what", "whats", "the"}
+        keywords = [w for w in query.lower().split() if len(w) >= 3 and w not in stop_words]
+        if not keywords:
+            return []
+
+        # Build OR conditions — any keyword match counts
+        # Score = number of matching keywords (computed in SQL)
+        match_exprs = []
+        params: list[Any] = []
+        for i, kw in enumerate(keywords):
+            param_idx = i + 1
+            params.append(f"%{kw}%")
+            match_exprs.append(
+                f"(CASE WHEN payload->>'text' ILIKE ${param_idx} "
+                f"OR metadata->>'file_path' ILIKE ${param_idx} "
+                f"OR metadata->>'chunk_label' ILIKE ${param_idx} "
+                f"THEN 1 ELSE 0 END)"
+            )
+
+        score_expr = " + ".join(match_exprs)
+        # At least 1 keyword must match
+        or_conditions = " OR ".join(
+            f"(payload->>'text' ILIKE ${i+1} OR metadata->>'file_path' ILIKE ${i+1})"
+            for i in range(len(keywords))
+        )
+        params.append(min(limit, 50))
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT id, payload, metadata, ({score_expr}) as match_score
+                FROM events
+                WHERE source = 'code' AND ({or_conditions})
+                ORDER BY match_score DESC, created_at DESC
+                LIMIT ${len(params)}
+                """,
+                *params,
+            )
+
+        return [
+            {
+                "id": str(r["id"]),
+                "payload": json.loads(r["payload"]),
+                "metadata": json.loads(r["metadata"]),
+            }
+            for r in rows
+        ]
+
     async def count_events(
         self,
         source: Optional[str] = None,

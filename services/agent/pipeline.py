@@ -190,27 +190,19 @@ class AgentPipeline:
                     if cm.get("id") not in seen_ids:
                         memories.append(cm)
 
-                # Also search episodic code events (keyword match)
-                code_events = await self._memory.query_events(
-                    source="code", event_type="code.indexed", limit=100,
-                )
-                keywords = [w for w in body_lower.split() if len(w) > 3]
-                matched_code = []
-                for evt in code_events:
-                    text = evt.get("payload", {}).get("text", "").lower()
-                    meta = evt.get("metadata", {})
-                    if any(kw in text for kw in keywords):
-                        # Business logic and API specs get boosted score
-                        doc_type = meta.get("doc_type", "")
-                        score = 0.8 if doc_type in ("business-logic", "api-spec") else 0.5
-                        matched_code.append({
-                            "memory": evt["payload"].get("text", "")[:500],
-                            "score": score,
-                            "metadata": meta,
-                        })
-                # Sort by score (docs first, then code)
-                matched_code.sort(key=lambda x: x["score"], reverse=True)
-                memories.extend(matched_code[:10])
+                # Full-text search code chunks in Postgres
+                # Search with original query + CamelCase/snake_case variants
+                search_terms = self._extract_code_search_terms(body)
+                code_results = await self._memory.search_code(search_terms, limit=20)
+                for cr in code_results:
+                    meta = cr.get("metadata", {})
+                    doc_type = meta.get("doc_type", "")
+                    score = 0.8 if doc_type in ("business-logic", "api-spec") else 0.5
+                    memories.append({
+                        "memory": cr["payload"].get("text", "")[:500],
+                        "score": score,
+                        "metadata": meta,
+                    })
 
             # Step 3: sender relationship context
             sender_id = event.get("sender_id", "")
@@ -321,6 +313,30 @@ class AgentPipeline:
     # ------------------------------------------------------------------
     # Room history check
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_code_search_terms(body: str) -> str:
+        """Convert natural language query to code-relevant search terms.
+
+        Extracts English keywords, generates CamelCase/snake_case variants,
+        and combines with the original query for broader matching.
+        """
+        import re
+        # Extract English words (likely code-relevant)
+        english_words = re.findall(r"[a-zA-Z_]{3,}", body)
+        # Also extract potential code terms by joining adjacent English words as CamelCase
+        terms = set(english_words)
+        # Add CamelCase combination: "money source" → "MoneySource"
+        if len(english_words) >= 2:
+            camel = "".join(w.capitalize() for w in english_words)
+            terms.add(camel)
+            # Also snake_case
+            terms.add("_".join(w.lower() for w in english_words))
+        # Add individual words
+        for w in english_words:
+            terms.add(w)
+        # Combine with original body for Vietnamese context
+        return " ".join(terms) + " " + body
 
     @staticmethod
     def _is_mentioned(body: str) -> bool:
