@@ -17,7 +17,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # Default models per provider
-DEFAULT_GEMINI_MODEL = "gemini-3.0-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514"
 
 # Appended to system prompt to request structured JSON output
