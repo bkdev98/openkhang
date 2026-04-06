@@ -265,6 +265,19 @@ class LLMClient:
             )
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning("Failed to parse structured LLM response: %s", exc)
+            # Last resort: try to extract reply_text with regex
+            rt_match = re.search(r'"reply_text"\s*:\s*"((?:[^"\\]|\\.)*)"', raw_text)
+            if rt_match:
+                extracted = rt_match.group(1).replace("\\n", "\n").replace('\\"', '"')
+                return LLMResponse(
+                    text=extracted,
+                    confidence=0.3,
+                    evidence=[],
+                    model_used=model_used,
+                    tokens_used=tokens_used,
+                    latency_ms=latency_ms,
+                    raw=raw_text,
+                )
             return LLMResponse(
                 text=raw_text.strip(),
                 confidence=0.3,
