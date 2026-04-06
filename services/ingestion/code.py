@@ -54,9 +54,16 @@ class CodeIngestor(BaseIngestor):
         return docs
 
     def chunk(self, doc: Document) -> list[Chunk]:
-        """Chunk a code file by class/function boundaries."""
+        """Chunk a code file by class/function boundaries.
+
+        Markdown docs are chunked by section headers and tagged with doc_type
+        (business-logic, api-spec, readme, guide) for priority retrieval.
+        """
+        ext = doc.metadata.get("extension", "")
+        if ext == ".md":
+            return self._chunk_markdown_doc(doc)
         lang = doc.metadata.get("language", "")
-        if lang == "kotlin" or doc.metadata.get("extension") == ".kt":
+        if lang == "kotlin" or ext == ".kt":
             return self._chunk_kotlin(doc)
         return self._chunk_by_blocks(doc)
 
@@ -326,6 +333,57 @@ class CodeIngestor(BaseIngestor):
 
     # ── Kotlin chunking ─────────────────────────────────────────────
 
+    def _chunk_markdown_doc(self, doc: Document) -> list[Chunk]:
+        """Chunk markdown docs by ## headers. Tags with doc_type for priority."""
+        file_path = doc.metadata.get("file_path", "").lower()
+
+        # Detect doc type from filename
+        doc_type = "documentation"
+        if "business-logic" in file_path:
+            doc_type = "business-logic"
+        elif "api-spec" in file_path:
+            doc_type = "api-spec"
+        elif "readme" in file_path:
+            doc_type = "readme"
+        elif "claude" in file_path or "ai.md" in file_path:
+            doc_type = "project-guide"
+
+        content = doc.content
+        sections = re.split(r'^(#{1,3}\s+.+)$', content, flags=re.MULTILINE)
+
+        chunks = []
+        current_header = f"[{doc_type}] {doc.title}"
+        current_text = ""
+
+        for part in sections:
+            if re.match(r'^#{1,3}\s+', part):
+                # Save previous section
+                if current_text.strip():
+                    chunks.append(self._make_chunk(
+                        doc, current_text.strip(), current_header,
+                        extra_meta={"doc_type": doc_type, "priority": "high"},
+                    ))
+                current_header = part.strip().lstrip("#").strip()
+                current_text = part + "\n"
+            else:
+                current_text += part
+
+        # Last section
+        if current_text.strip():
+            chunks.append(self._make_chunk(
+                doc, current_text.strip(), current_header,
+                extra_meta={"doc_type": doc_type, "priority": "high"},
+            ))
+
+        # If no sections found, treat whole file as one chunk
+        if not chunks:
+            chunks.append(self._make_chunk(
+                doc, content, f"[{doc_type}] {doc.title}",
+                extra_meta={"doc_type": doc_type, "priority": "high"},
+            ))
+
+        return chunks
+
     def _chunk_kotlin(self, doc: Document) -> list[Chunk]:
         """Chunk Kotlin files by class/function/object boundaries."""
         content = doc.content
@@ -450,13 +508,17 @@ class CodeIngestor(BaseIngestor):
 
         return chunks
 
-    def _make_chunk(self, doc: Document, text: str, label: str) -> Chunk:
+    def _make_chunk(self, doc: Document, text: str, label: str,
+                    extra_meta: dict | None = None) -> Chunk:
         """Create a chunk with full metadata for code search."""
+        meta = {
+            **doc.metadata,
+            "chunk_label": label,
+            "source": doc.source,
+        }
+        if extra_meta:
+            meta.update(extra_meta)
         return Chunk(
             text=f"[{doc.metadata['project']}:{doc.metadata['file_path']}] {label}\n\n{text}",
-            metadata={
-                **doc.metadata,
-                "chunk_label": label,
-                "source": doc.source,
-            },
+            metadata=meta,
         )

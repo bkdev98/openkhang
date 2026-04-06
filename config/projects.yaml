@@ -17,7 +17,7 @@ projects:
     language: kotlin/typescript
     description: "Mini App Transaction History"
     include_paths: []  # index everything
-    extensions: [".kt", ".ts", ".tsx"]
+    extensions: [".kt", ".ts", ".tsx", ".md"]
     exclude_patterns: ["node_modules", "build", "dist", ".gradle"]
 
   expense:
@@ -25,5 +25,13 @@ projects:
     language: kotlin/typescript
     description: "Mini App Expense Management"
     include_paths: []  # index everything
-    extensions: [".kt", ".ts", ".tsx"]
+    extensions: [".kt", ".ts", ".tsx", ".md"]
     exclude_patterns: ["node_modules", "build", "dist", ".gradle"]
+
+    # High-priority docs — these get tagged as business-logic/api-spec
+    priority_docs:
+      - docs/business-logic-summary.md
+      - docs/api-specs-summary.md
+      - CLAUDE.md
+      - AI.md
+      - README.md

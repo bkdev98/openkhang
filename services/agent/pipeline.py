@@ -168,20 +168,27 @@ class AgentPipeline:
                     if cm.get("id") not in seen_ids:
                         memories.append(cm)
 
-                # Also search episodic code events
+                # Also search episodic code events (keyword match)
                 code_events = await self._memory.query_events(
-                    source="code", event_type="code.indexed", limit=50,
+                    source="code", event_type="code.indexed", limit=100,
                 )
-                # Simple keyword match on code events (vector search not available on events)
                 keywords = [w for w in body_lower.split() if len(w) > 3]
+                matched_code = []
                 for evt in code_events:
                     text = evt.get("payload", {}).get("text", "").lower()
+                    meta = evt.get("metadata", {})
                     if any(kw in text for kw in keywords):
-                        memories.append({
+                        # Business logic and API specs get boosted score
+                        doc_type = meta.get("doc_type", "")
+                        score = 0.8 if doc_type in ("business-logic", "api-spec") else 0.5
+                        matched_code.append({
                             "memory": evt["payload"].get("text", "")[:500],
-                            "score": 0.5,
-                            "metadata": evt.get("metadata", {}),
+                            "score": score,
+                            "metadata": meta,
                         })
+                # Sort by score (docs first, then code)
+                matched_code.sort(key=lambda x: x["score"], reverse=True)
+                memories.extend(matched_code[:10])
 
             # Step 3: sender relationship context
             sender_id = event.get("sender_id", "")
