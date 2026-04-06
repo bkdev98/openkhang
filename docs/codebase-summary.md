@@ -1,0 +1,528 @@
+# Codebase Summary: openkhang
+
+**Last Updated:** April 6, 2025  
+**Total Files:** 118  
+**Total Tokens:** 154,558  
+**Main Language:** Python 3.13
+
+## Directory Structure Overview
+
+```
+openkhang/
+├── services/                      # Core Python services (shared .venv)
+│   ├── memory/                    # Vector search + episodic store (8 files)
+│   ├── ingestion/                 # Knowledge source ingestors (10 files)
+│   ├── agent/                     # Dual-mode agent pipeline (15 files)
+│   ├── workflow/                  # YAML state machines (5 files)
+│   ├── dashboard/                 # FastAPI web UI (11 files)
+│   └── requirements.txt           # Shared dependencies
+│
+├── config/                        # Configuration files (YAML + JSON)
+│   ├── persona.yaml               # Identity, style, constraints
+│   ├── confidence_thresholds.yaml # Per-room thresholds
+│   ├── projects.yaml              # Code projects to index
+│   ├── style_examples.jsonl       # Chat examples for tuning
+│   └── workflows/                 # YAML state machine definitions
+│
+├── scripts/                       # Setup & ingestion scripts (8 files)
+│   ├── onboard.sh                 # Full setup orchestrator
+│   ├── setup-bridge.sh            # Bridge + Synapse setup
+│   ├── setup-memory.sh            # Memory service initialization
+│   ├── run-dashboard.sh           # Start web UI
+│   ├── matrix-listener.py         # Chat listener daemon
+│   ├── seed-knowledge.py          # Ingest initial data
+│   ├── seed-code.py               # Index source code
+│   └── full-chat-seed.py          # Bulk chat history import
+│
+├── agents/                        # Claude Code plugin agents (4 files)
+│   ├── bug-investigator.md        # Investigate urgent bugs
+│   ├── chat-categorizer.md        # Categorize chat patterns
+│   ├── sprint-monitor.md          # Track sprint progress
+│   └── pipeline-fixer.md          # Auto-fix CI/CD failures
+│
+├── skills/                        # Claude Code plugin skills (13 dirs)
+│   ├── chat-autopilot/            # Main chat interaction
+│   ├── chat-scan/                 # Search chat history
+│   ├── chat-reply/                # Draft replies
+│   ├── chat-spaces/               # List spaces
+│   ├── chat-auth/                 # Authentication
+│   ├── chat-listen/               # Listen for messages
+│   ├── jira-knowledge/            # Jira integration
+│   ├── jira-knowledge/references/ # Jira CLI reference
+│   ├── gitlab-knowledge/          # GitLab integration
+│   ├── confluence-search/         # Confluence search
+│   ├── confluence-update/         # Update Confluence
+│   ├── pipeline-watch/            # Monitor pipelines
+│   ├── mr-manage/                 # Manage MRs
+│   ├── sprint-board/              # Sprint board view
+│   ├── code-session/              # Code implementation
+│   └── openkhang-status/          # System status
+│
+├── hooks/                         # Claude Code plugin hooks (2 files)
+│   ├── hooks.json                 # Hook definitions
+│   └── scripts/                   # Hook scripts
+│
+├── plans/                         # Development plans & reports
+│   ├── 260406-1153-digital-twin-system/
+│   │   ├── plan.md                # Overall plan
+│   │   ├── phase-01-*.md          # Memory foundation
+│   │   ├── phase-02-*.md          # Knowledge ingestion
+│   │   ├── phase-03-*.md          # Dual-mode agent
+│   │   ├── phase-04-*.md          # Workflow engine
+│   │   ├── phase-05-*.md          # Dashboard
+│   │   ├── phase-06-*.md          # Integration
+│   │   └── reports/               # Phase completion reports
+│   └── reports/                   # Researcher findings
+│
+├── .claude/                       # Claude Code configuration
+│   ├── openkhang.local.md         # Project instructions
+│   ├── gchat-autopilot.local.md   # Chat autopilot rules
+│   └── ...
+│
+├── docker-compose.yml             # Infrastructure services
+├── .env.example                   # Configuration template
+├── .gitignore
+├── README.md
+└── docs/                          # This documentation (NEW)
+    ├── project-overview-pdr.md    # Vision & requirements
+    ├── system-architecture.md     # Component design
+    ├── code-standards.md          # Coding conventions
+    ├── codebase-summary.md        # This file
+    ├── deployment-guide.md        # Setup instructions
+    └── project-roadmap.md         # Progress & timeline
+```
+
+## Key Services
+
+### 1. Memory Service (`services/memory/`)
+
+**Purpose:** Vector embeddings + episodic event log + session state
+
+**Files (8 total, ~1100 LOC):**
+- `client.py` (220 LOC) — Public API: `MemoryClient` class with search, add_memory, get_entity
+- `config.py` (95 LOC) — Load `.env` vars, initialize Mem0/Ollama config
+- `episodic.py` (180 LOC) — Append-only event log; `events` table interface
+- `working.py` (80 LOC) — In-memory TTL cache; `WorkingMemory` class
+- `schema.sql` (84 LOC) — Postgres schema: extensions, tables, indexes
+- `ingest-chat-history.py` (140 LOC) — One-off bulk import from chat export
+- `__init__.py` — Package init
+- `tests/` — Unit tests
+
+**Key Classes:**
+```python
+class MemoryClient:
+    async def search(query: str, top_k: int = 5) -> List[Dict]
+    async def add_memory(memory_text: str, metadata: Dict, source: str)
+    async def search_entity(entity_type: str) -> List[Entity]
+    async def delete_memory(memory_id: str)
+
+class EpisodicStore:
+    async def append_event(source: str, event_type: str, payload: Dict)
+    async def get_recent_events(source: Optional[str], limit: int = 50)
+    async def search_events(query: str, date_range: Tuple)
+
+class WorkingMemory:
+    def get_session(session_id: str) -> Optional[Session]
+    def set_session(session_id: str, data: Dict, ttl: int = 1800)
+    def clear_expired()
+```
+
+**Database:**
+- `pgvector` extension (1024-dim vectors)
+- `uuid-ossp` extension (for UUIDs)
+- Tables: `events`, `sync_state` (openkhang-owned); `mem0_memories`, etc (Mem0-managed)
+
+### 2. Ingestion Layer (`services/ingestion/`)
+
+**Purpose:** Fetch data from 4 sources, chunk semantically, embed, store
+
+**Files (10 total, ~1800 LOC):**
+- `base.py` (140 LOC) — `BaseIngestor` abstract class, retry logic
+- `chat.py` (250 LOC) — `ChatIngestor`, real-time via matrix-listener
+- `jira.py` (280 LOC) — `JiraIngestor`, 30-min polling via REST API
+- `gitlab.py` (240 LOC) — `GitLabIngestor`, 30-min polling via glab CLI
+- `confluence.py` (310 LOC) — `ConfluenceIngestor`, 1h polling via REST API
+- `code.py` (380 LOC) — `CodeIngestor`, tree-sitter chunking for 3 projects
+- `chunker.py` (140 LOC) — `SemanticChunker` (paragraph/function/class splitting)
+- `entity.py` (95 LOC) — `Entity` dataclass (name, type, description)
+- `scheduler.py` (225 LOC) — `IngestScheduler`, coordinates polling schedule
+- `sync_state.py` (95 LOC) — `SyncState` tracker (prevents duplicate ingestion)
+
+**Key Classes:**
+```python
+class ChatIngestor(BaseIngestor):
+    async def ingest_message(msg: Message, room: Room)
+    async def search_history(query: str, room_id: Optional[str])
+
+class JiraIngestor(BaseIngestor):
+    async def ingest_issue(issue_id: str, full: bool = False)
+    async def search_issues(jql: str, limit: int = 10)
+    async def poll_recently_updated(limit: int = 50)
+
+class CodeIngestor(BaseIngestor):
+    async def ingest_repo(project_key: str, force: bool = False)
+    async def search_code(query: str, file_type: Optional[str])
+    async def index_function(func_name: str, file_path: str, source: str)
+
+class IngestScheduler:
+    async def start()
+    async def stop()
+    def register_ingestor(ingestor: BaseIngestor, schedule: str)
+```
+
+**Config (`config/projects.yaml`):**
+- 3 projects: momo-app (Kotlin), transactionhistory (Kotlin+TS), expense (Kotlin+TS)
+- Include/exclude patterns, file extensions, max file size
+
+**Integration with Memory:**
+All ingestors call `MemoryClient.add_memory()` after chunking.
+
+### 3. Agent Pipeline (`services/agent/`)
+
+**Purpose:** Process message → generate draft → score confidence → queue/send
+
+**Files (15 total, ~2200 LOC):**
+- `pipeline.py` (380 LOC) — Main orchestrator; coordinates components
+- `classifier.py` (165 LOC) — `MessageClassifier`, LLM-based classification
+- `confidence.py` (255 LOC) — `ConfidenceScorer`, scoring + modifiers
+- `prompt_builder.py` (280 LOC) — `PromptBuilder`, system + user + context
+- `llm_client.py` (195 LOC) — `LLMClient`, Claude API wrapper with retry
+- `draft_queue.py` (225 LOC) — `DraftQueue`, manage pending/approved drafts
+- `matrix_sender.py` (155 LOC) — `MatrixSender`, send to Matrix homeserver
+- `prompts/outward_system.md` — System prompt for outward mode
+- `prompts/inward_system.md` — System prompt for inward mode
+- `tests/` — Unit tests (4 files)
+
+**Key Classes:**
+```python
+class MessageClassifier:
+    async def classify(msg: Message) -> str  # "work"|"question"|"social"|"humor"|"greeting"|"fyi"
+
+class ConfidenceScorer:
+    async def score(response: str, msg: Message, context: List) -> float
+    def apply_modifiers(base: float, room: Room, sender: User) -> float
+
+class PromptBuilder:
+    def build_system_prompt(mode: str = "outward") -> str
+    def build_user_message(msg: Message, context: List) -> str
+    def add_rag_context(context: List[Dict]) -> str
+
+class LLMClient:
+    async def generate(system: str, user: str, temperature: float = 0.7) -> str
+    async def count_tokens(text: str) -> int
+
+class DraftQueue:
+    async def enqueue(draft: DraftReply)
+    async def get_pending(room_id: Optional[str]) -> List[DraftReply]
+    async def approve(draft_id: str, edited_text: Optional[str])
+    async def reject(draft_id: str)
+```
+
+**Pipeline Stages (in `pipeline.py`):**
+1. Receive from Redis
+2. Classify message
+3. Search memory (semantic + episodic)
+4. Build prompt with RAG context
+5. Call Claude API
+6. Score confidence + apply modifiers
+7. Decide: auto-send vs draft
+8. Log to events table
+
+**Config:**
+- `config/persona.yaml` — Identity, style, never_do rules
+- `config/confidence_thresholds.yaml` — Per-room thresholds
+
+### 4. Workflow Engine (`services/workflow/`)
+
+**Purpose:** YAML state machines for multi-step automation with audit trail
+
+**Files (5 total, ~800 LOC):**
+- `workflow_engine.py` (390 LOC) — Main orchestrator; manage instances
+- `action_executor.py` (285 LOC) — Execute actions (send_reply, create_jira, etc)
+- `state_machine.py` (165 LOC) — YAML parser, state transitions
+- `workflow_persistence.py` (130 LOC) — Load/save from Postgres
+- `audit_log.py` (115 LOC) — Record actions + approvals
+
+**Key Classes:**
+```python
+class WorkflowEngine:
+    async def start_workflow(name: str, trigger_event: Dict) -> str
+    async def get_instance(instance_id: str) -> WorkflowInstance
+    async def cancel_workflow(instance_id: str)
+
+class StateMachine:
+    def __init__(self, yaml_path: str)
+    def get_current_state() -> State
+    async def transition(action: str)
+    def validate()
+
+class ActionExecutor:
+    async def execute(action_type: str, params: Dict, tier: int) -> Dict
+    # Actions: send_reply, create_jira, update_confluence, trigger_code_session
+```
+
+**Workflow Examples (`config/workflows/`):**
+- `chat-to-jira.yaml` — Route chat patterns to Jira ticket creation
+- `pipeline-failure.yaml` — Auto-investigate failed CI/CD builds
+
+**Three-Tier Autonomy:**
+- Tier 1: Auto-execute (no approval)
+- Tier 2: Guided (show preview before executing)
+- Tier 3: Human-only (must be manually approved)
+
+**Audit Trail:**
+Every action logged to `audit_log` table with: workflow_id, action_type, tier, params, result, approved_by, created_at.
+
+### 5. Dashboard (`services/dashboard/`)
+
+**Purpose:** Web UI for draft review, service health, twin chat
+
+**Files (11 total, ~2000 LOC):**
+- `app.py` (280 LOC) — FastAPI main app, route definitions
+- `dashboard_services.py` (355 LOC) — High-level service logic
+- `inbox_relay.py` (95 LOC) — Consolidate mentions/assignments/flags
+- `agent_relay.py` (160 LOC) — Direct agent communication
+- `health_checker.py` (110 LOC) — Probe postgres, redis, ollama, matrix-listener
+- `twin_chat.py` (75 LOC) — Memory query interface
+- `templates/base.html` (120 LOC) — Base layout, nav, styling
+- `templates/index.html` (110 LOC) — Home: feed, drafts, health
+- `templates/partials/` — HTMX components (6 files, 280 LOC total)
+- `templates/static/style.css` (180 LOC) — TailwindCSS overrides
+
+**Key Routes:**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/` | Home (feed, draft count, health) |
+| GET | `/drafts` | Draft queue |
+| POST | `/drafts/{id}/approve` | Approve single draft |
+| POST | `/drafts/{id}/reject` | Reject draft |
+| POST | `/drafts/{id}/edit` | Edit and re-send |
+| GET | `/events` (SSE) | Real-time activity feed |
+| POST | `/twin-chat` | Query agent |
+| GET | `/health` | Service health |
+| GET | `/settings` (future) | Configure persona, thresholds |
+
+**Real-Time:**
+Server-Sent Events (SSE) for activity feed updates. Clients subscribe to `/events`; server pushes new events as they occur.
+
+**Frontend:**
+- HTMX for dynamic updates (no page reload)
+- TailwindCSS for styling
+- Jinja2 templates with partials for components
+
+## Database Schema
+
+**Postgres (5433)**
+
+```sql
+-- Episodic event log (append-only)
+CREATE TABLE events (
+    id UUID PRIMARY KEY,
+    source VARCHAR(50),           -- 'chat'|'jira'|'gitlab'|'confluence'
+    event_type VARCHAR(100),       -- 'message.new'|'issue.created'|'mr.updated'|etc
+    actor VARCHAR(255),            -- User who triggered event
+    payload JSONB NOT NULL,        -- Raw event data
+    metadata JSONB DEFAULT '{}',   -- Tags, room_id, project_id, etc
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX idx_events_source, idx_events_created_at, idx_events_type;
+
+-- Draft replies queue
+CREATE TABLE draft_replies (
+    id UUID PRIMARY KEY,
+    event_id UUID REFERENCES events(id),
+    room_id VARCHAR(255),
+    original_message TEXT,
+    draft_text TEXT,
+    confidence FLOAT,              -- 0.0 - 1.0
+    evidence JSONB,                -- Retrieved docs, scores
+    status VARCHAR(20),            -- 'pending'|'approved'|'rejected'|'edited'
+    created_at TIMESTAMPTZ,
+    reviewed_at TIMESTAMPTZ,
+    reviewer_action VARCHAR(20)
+);
+Create INDEX idx_drafts_status, idx_drafts_room;
+
+-- Ingestion sync state
+CREATE TABLE sync_state (
+    source VARCHAR(50) PRIMARY KEY,  -- 'chat'|'jira'|'gitlab'|'confluence'
+    last_synced_at TIMESTAMPTZ,
+    item_count INTEGER
+);
+
+-- Workflow instances
+CREATE TABLE workflow_instances (
+    id UUID PRIMARY KEY,
+    workflow_name VARCHAR(100),
+    current_state VARCHAR(100),
+    context JSONB,
+    trigger_event JSONB,
+    status VARCHAR(20),            -- 'active'|'completed'|'failed'
+    created_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ
+);
+
+-- Audit log (action trail)
+CREATE TABLE audit_log (
+    id UUID PRIMARY KEY,
+    workflow_id UUID REFERENCES workflow_instances(id),
+    action_type VARCHAR(100),
+    tier INTEGER,                  -- 1|2|3 (autonomy level)
+    params JSONB,
+    result JSONB,
+    approved_by VARCHAR(255),
+    created_at TIMESTAMPTZ
+);
+
+-- Mem0-managed tables (auto-created)
+CREATE TABLE mem0_memories (
+    id UUID PRIMARY KEY,
+    text TEXT,
+    embedding VECTOR(1024),        -- pgvector
+    metadata JSONB,
+    created_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ
+);
+```
+
+## External Integrations
+
+| Service | Integration | Usage |
+|---------|-----------|-------|
+| Google Chat | mautrix-googlechat bridge | Receive/send messages |
+| Jira | REST API + jira CLI | Ingest issues, create tickets |
+| GitLab | glab CLI + REST API | Ingest MRs, trigger pipelines |
+| Confluence | REST API | Ingest pages, update docs |
+| Claude API | anthropic Python SDK | Generate responses, score confidence |
+| Ollama | bge-m3 model (native M2) | Embeddings (1024-dim) |
+| Postgres | psycopg + pgvector | Memory, events, drafts, workflows |
+| Redis | aioredis | Pub/sub event bus, session store |
+| Matrix | Matrix Client API | Send messages to rooms |
+
+## Key Dependencies
+
+```python
+# From services/requirements.txt
+python-dotenv==1.0.0
+pydantic==2.5.0
+psycopg[binary]==3.1.12
+pgvector==0.2.4
+asyncpg==0.29.0
+httpx==0.25.2
+aiohttp==3.9.1
+anthropic==0.25.0  # Claude API
+fastapi==0.104.1
+uvicorn==0.24.0
+redis==5.0.1
+pyyaml==6.0
+mem0-ai==0.1.0  # Mem0 SDK
+```
+
+## Scripts Overview
+
+| Script | Purpose | Runs | Frequency |
+|--------|---------|------|-----------|
+| `onboard.sh` | Full setup (bridge, memory, dashboard) | Manually | Once (initial setup) |
+| `setup-bridge.sh` | Initialize bridge + Synapse | By onboard.sh | Once |
+| `setup-memory.sh` | Initialize memory service | By onboard.sh | Once |
+| `run-dashboard.sh` | Start FastAPI dashboard | Manually | On demand |
+| `matrix-listener.py` | Chat listener daemon | Background | Always |
+| `seed-knowledge.py` | One-off knowledge ingestion | Manually | Ad-hoc |
+| `seed-code.py` | Index source code | Manually | Ad-hoc |
+| `full-chat-seed.py` | Bulk chat history import | Manually | Once |
+
+## Plugin Skills & Agents
+
+**Skills (Claude Code extensions):**
+- `chat-autopilot/` — Main chat interaction, message routing
+- `jira-knowledge/` — Jira sprint, issue, linking
+- `gitlab-knowledge/` — GitLab MR, pipeline, code session
+- `confluence-search/` — Search Confluence docs
+- `openkhang-status/` — Check system health, draft queue
+- Others: chat-scan, chat-reply, chat-spaces, chat-auth, chat-listen, etc
+
+**Agents (Claude Code multi-step workflows):**
+- `bug-investigator` — Investigate urgent bugs, determine fixability
+- `chat-categorizer` — Categorize patterns, extract entities
+- `sprint-monitor` — Track sprint progress, identify blockers
+- `pipeline-fixer` — Auto-fix CI/CD failures
+
+## Large Files (by Token Count)
+
+| File | Tokens | Purpose |
+|------|--------|---------|
+| plans/reports/researcher-memory-architecture.md | 7,345 | Memory design findings |
+| plans/reports/researcher-workflow-patterns.md | 6,830 | Workflow engine design |
+| config/style_examples.jsonl | 6,738 | Chat examples for tuning |
+| plans/reports/researcher-local-dashboard.md | 4,375 | Dashboard design findings |
+| scripts/matrix-listener.py | 3,529 | Chat listener implementation |
+
+## Module Dependency Graph
+
+```
+matrix-listener.py
+    ↓
+    Redis (pub/sub)
+    ↓
+    ┌─────────────┬──────────────┬──────────────┬──────────────┐
+    ↓             ↓              ↓              ↓              ↓
+Ingestion     Agent Pipeline  Workflow Engine  Dashboard    Memory Service
+(Jira, Git,  (Classify,      (State machine,  (FastAPI,    (Mem0, pgvector,
+ Confluence,  Confidence,      Audit log)      HTMX, SSE)   episodic)
+ Code)        Prompt, LLM)
+    │             │              │              │              │
+    └─────────────┴──────────────┴──────────────┴──────────────┘
+                          ↓
+                    ┌─────────────┐
+                    │ Services    │
+                    ├─────────────┤
+                    │ Postgres    │
+                    │ Redis       │
+                    │ Ollama      │
+                    │ Synapse     │
+                    └─────────────┘
+```
+
+## Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `.env` | Secrets (API keys, DB creds) |
+| `config/persona.yaml` | Identity, style, never_do rules |
+| `config/confidence_thresholds.yaml` | Per-room auto-send thresholds |
+| `config/projects.yaml` | Code projects to index (3 repos) |
+| `config/style_examples.jsonl` | Chat examples for voice tuning |
+| `config/workflows/*.yaml` | State machine definitions |
+| `docker-compose.yml` | Infrastructure services (postgres, redis, ollama) |
+
+## Development Workflow
+
+1. **Code changes:** Edit in `services/{component}/`
+2. **Type check:** Use type hints (mandatory)
+3. **Tests:** `pytest services/{component}/tests/ -v`
+4. **Run service locally:**
+   ```bash
+   cd services
+   source .venv/bin/activate
+   python3 -m uvicorn dashboard.app:app --reload
+   ```
+5. **Commit:** Follow Conventional Commits format
+6. **Deploy:** Docker Compose or systemd service
+
+## Testing
+
+- **Framework:** pytest + pytest-asyncio
+- **Coverage:** pytest-cov
+- **Location:** `services/{component}/tests/`
+- **Run:** `pytest services/ -v` (all tests)
+
+Example: `services/agent/tests/test_classifier.py`, `test_confidence.py`, `test_pipeline.py`
+
+## Monitoring & Debugging
+
+- **Logs:** Python `logging` module; configured in `app.py`
+- **Health Endpoint:** `GET /health` returns service status
+- **Dashboard:** Real-time activity feed via SSE
+- **Database:** `psql -d openkhang -c "SELECT COUNT(*) FROM events;"`
+- **Redis:** `redis-cli KEYS "openkhang:*"`, `redis-cli PUBSUB CHANNELS`
