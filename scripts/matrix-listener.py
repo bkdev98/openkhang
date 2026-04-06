@@ -281,9 +281,11 @@ def sync_loop(hs, token, own_puppet_prefix, redis_url=None):
                 for event in rdata.get("timeline", {}).get("events", []):
                     if event.get("type") != "m.room.message":
                         continue
-                    # Skip own puppet messages
+                    # Skip own messages (puppet + claude user)
                     sender = event.get("sender", "")
                     if own_puppet_prefix and sender.startswith(own_puppet_prefix):
+                        continue
+                    if sender.startswith("@claude:"):
                         continue
                     # Skip bot messages
                     if "googlechatbot" in sender:

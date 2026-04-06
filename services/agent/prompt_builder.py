@@ -114,8 +114,17 @@ class PromptBuilder:
         sender_id = event.get("sender_id", "unknown")
         room_name = event.get("room_name", "")
 
+        # Use readable name: prefer room_name sender context over raw numeric ID
+        sender_display = sender_id
+        # Strip googlechat_ prefix and numeric IDs for readability
+        if sender_display.startswith("@googlechat_"):
+            sender_display = sender_display.split(":")[0].replace("@googlechat_", "")
+        # If still a raw number, label as "a colleague"
+        if sender_display.isdigit():
+            sender_display = "a colleague"
+
         if mode == "outward":
-            header = f"[Message from {sender_id}"
+            header = f"[Message from {sender_display}"
             if room_name:
                 header += f" in {room_name}"
             header += f" | intent: {intent}]"

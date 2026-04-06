@@ -92,9 +92,15 @@ async def run_agent_relay(pool: asyncpg.Pool) -> None:
                 if not body or len(body) < 2:
                     continue
 
-                # Skip bot/system messages
+                # Skip own messages (prevent reply loop) and bot messages
                 sender_id = payload.get("sender", "")
+                own_user = os.getenv("MATRIX_USER", "@claude:localhost")
+                if sender_id == own_user or sender_id.startswith("@claude:"):
+                    continue
                 if "bot" in sender_id.lower():
+                    continue
+                # Also skip if sender_id matches our googlechat puppet
+                if "googlechat" in sender_id and os.getenv("MATRIX_USER", "") in sender_id:
                     continue
 
                 sender_name = payload.get("sender_id", sender_id)
