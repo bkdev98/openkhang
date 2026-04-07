@@ -251,14 +251,14 @@ projects:
    - Parallel fetch via `asyncio.gather` reduces latency 20-30%
    - Per-intent context requirements (social = none, question = rag+code+sender+room)
 
-4. **Tool Registry** (17 tools across knowledge, draft, execution, and external integrations)
+4. **Tool Registry** (17 tools expanded from 8)
    - `BaseTool` ABC + `ToolRegistry` (ordered execution)
-   - **Knowledge & Search (4):** search_knowledge, search_code, search_events, search_jira, search_gitlab
-   - **Draft Management (2):** list_drafts, manage_draft (approve/reject/edit)
-   - **Context & History (3):** get_sender_context, get_room_history, get_thread_messages, lookup_person
+   - **Knowledge & Search (5):** search_knowledge (vector), search_code, search_events, search_jira, search_gitlab
+   - **Draft Management (2):** list_drafts, manage_draft (approve/reject/edit with auto-send)
+   - **Context & History (4):** get_sender_context, get_room_history, get_thread_messages, lookup_person
    - **Message Execution (1):** send_message
-   - **External Integration (5):** web_fetch, web_search, search_jira, search_gitlab, shell_exec
-   - **Persistence (1):** memory_note, create_draft
+   - **External Integration (4):** web_fetch (HTTP), web_search (DuckDuckGo), shell_exec (safe shell), memory_note (persistence)
+   - **Draft Creation (1):** create_draft
    - **Tool Details:** All tools implement `name`, `description`, `parameters` (JSON Schema), `execute(**kwargs) -> ToolResult`
 
 5. **Skill System** (deterministic mode+intent→skill matching)

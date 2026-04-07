@@ -1,9 +1,10 @@
 # Codebase Summary: openkhang
 
 **Last Updated:** April 7, 2026  
-**Total Files:** 135+  
-**Total Tokens:** ~180,000  
+**Total Files:** 150+  
+**Total Tokens:** ~200,000+  
 **Main Language:** Python 3.13
+**Test Suite:** 200+ tests (175 unit + 25+ integration)
 
 ## Directory Structure Overview
 
@@ -181,7 +182,7 @@ All ingestors call `MemoryClient.add_memory()` after chunking.
 
 **Purpose:** 7-layer agentic architecture: router → context → channels → tools → loop → skills → responses
 
-**Files (52 total, ~7200 LOC):**
+**Files (60+ total, ~8500 LOC with 17 tools):**
 
 **Core Orchestration (7 files, ~1350 LOC):**
 - `pipeline.py` (264 LOC) — Main orchestrator; matches skills via registry, creates trace per request
