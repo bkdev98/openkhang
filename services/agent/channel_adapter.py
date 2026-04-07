@@ -58,6 +58,8 @@ class CanonicalMessage:
             "sender_display_name": self.sender_display_name,
             "thread_event_id": self.thread_event_id,
             "event_id": self.event_id,
+            "is_group": self.is_group,
+            "is_mentioned": self.is_mentioned,
         }
 
 

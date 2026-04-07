@@ -184,8 +184,8 @@ def _cache_member(user_id: str, displayname: str) -> None:
         _user_display_names[user_id] = clean
 
 
-def _resolve_sender_name(sender: str) -> str:
-    """Look up sender's display name. Checks static user directory first, then member cache.
+def _resolve_sender_name(sender: str, room_id: str = "", hs: str = "", token: str = "") -> str:
+    """Look up sender's display name. Checks: static directory → member cache → Matrix API.
 
     Returns short name (just the person's name without org/title) or empty string.
     """
@@ -196,10 +196,26 @@ def _resolve_sender_name(sender: str) -> str:
         return _short_name(_gchat_users[gchat_id])
     # Fallback: member event cache
     dn = _user_display_names.get(sender, "")
-    return _short_name(dn) if dn else ""
+    if dn:
+        return _short_name(dn)
+    # Last resort: query Matrix API for member state (and cache the result)
+    if room_id and hs and token:
+        try:
+            enc_room = urllib.parse.quote(room_id)
+            enc_sender = urllib.parse.quote(sender)
+            result = matrix_api("GET", f"/rooms/{enc_room}/state/m.room.member/{enc_sender}", hs=hs, token=token)
+            raw_dn = result.get("displayname", "")
+            if raw_dn:
+                _cache_member(sender, raw_dn)
+                clean = _clean_display_name(raw_dn)
+                if clean:
+                    return _short_name(clean)
+        except Exception:
+            pass
+    return ""
 
 
-def parse_message(event, room_id, room_name):
+def parse_message(event, room_id, room_name, hs="", token=""):
     """Parse a Matrix event into a compact message dict."""
     content = event.get("content", {})
     sender = event.get("sender", "")
@@ -208,8 +224,8 @@ def parse_message(event, room_id, room_name):
     # Extract display name from sender (bridge format: @googlechat_USERID:localhost)
     sender_local = sender.split(":")[0].replace("@googlechat_", "").replace("@", "")
 
-    # Resolve human-readable sender name from cache
-    sender_display = _resolve_sender_name(sender)
+    # Resolve human-readable sender name (static dir → cache → Matrix API)
+    sender_display = _resolve_sender_name(sender, room_id, hs, token)
 
     # Check for thread
     relates = content.get("m.relates_to", {})
@@ -386,9 +402,9 @@ def sync_loop(hs, token, own_puppet_prefix, redis_url=None):
                     # Use room name, or sender's short name for unnamed DM rooms
                     effective_rname = rname
                     if not effective_rname:
-                        effective_rname = _resolve_sender_name(sender)
+                        effective_rname = _resolve_sender_name(sender, rid, hs, token)
 
-                    msg = parse_message(event, rid, effective_rname)
+                    msg = parse_message(event, rid, effective_rname, hs, token)
                     new_messages.append(msg)
 
             if new_messages:

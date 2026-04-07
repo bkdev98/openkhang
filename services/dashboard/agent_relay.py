@@ -242,10 +242,19 @@ async def _process_event(
     msg = await matrix_adapter.normalize_inbound(row, payload, metadata)
     event = msg.to_legacy_dict()
 
+    # Skip group messages where the owner is not mentioned — don't reply to unrelated threads
+    if msg.is_group and not msg.is_mentioned:
+        logger.info(
+            "agent_relay: SKIPPED group [%s] — not mentioned. body=%s",
+            event["room_name"] or event["room_id"][:20],
+            body[:60],
+        )
+        return
+
     logger.info(
         "agent_relay: processing [%s] %s — %s",
         event["room_name"] or event["room_id"][:20],
-        event["sender"],
+        event.get("sender_display_name") or event["sender"],
         body[:60],
     )
 
