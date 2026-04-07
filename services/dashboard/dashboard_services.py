@@ -285,12 +285,19 @@ class DashboardServices:
                 # Search episodic code/knowledge index
                 code_results = await client.search_code(query, limit=limit // 2)
                 for r in code_results:
-                    # Normalize episodic results to match memory card format
+                    payload = r.get("payload", {}) if isinstance(r.get("payload"), dict) else {}
+                    meta = r.get("metadata", {}) if isinstance(r.get("metadata"), dict) else {}
+                    text = payload.get("text", "")
+                    file_path = payload.get("file_path", "") or meta.get("file_path", "")
+                    chunk_label = payload.get("chunk_label", "") or meta.get("chunk_label", "")
+                    source = meta.get("source", "code")
                     results.append({
                         "id": str(r.get("id", "")),
-                        "text": r.get("payload", {}).get("body", "") if isinstance(r.get("payload"), dict) else str(r.get("payload", "")),
-                        "memory": r.get("payload", {}).get("body", "") if isinstance(r.get("payload"), dict) else "",
-                        "metadata": {"source": r.get("source", "code"), "event_type": r.get("event_type", "")},
+                        "text": text,
+                        "memory": chunk_label or text[:100],
+                        "file_path": file_path,
+                        "chunk_label": chunk_label,
+                        "metadata": meta,
                         "_source_type": "episodic",
                     })
             finally:
