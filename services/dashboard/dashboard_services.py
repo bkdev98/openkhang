@@ -275,7 +275,7 @@ class DashboardServices:
             client = MemoryClient(config)
             await client.connect()
             try:
-                results = await client.search(query, top_k=limit)
+                results = await client.search(query, limit=limit)
                 return results if isinstance(results, list) else []
             finally:
                 await client.close()
