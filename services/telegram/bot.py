@@ -38,7 +38,6 @@ router = Router()
 # DB pool injected from dashboard lifespan
 _pool: asyncpg.Pool | None = None
 
-
 def init_bot() -> tuple[Bot, Dispatcher] | None:
     """Create bot and dispatcher if token is configured."""
     global bot, dp
@@ -48,6 +47,9 @@ def init_bot() -> tuple[Bot, Dispatcher] | None:
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
     dp.include_router(router)
+    # Include draft callback handlers from separate module
+    from . import draft_callbacks
+    dp.include_router(draft_callbacks.router)
     logger.info("telegram: bot initialized (chat_id=%s)", CHAT_ID)
     return bot, dp
 
@@ -71,12 +73,18 @@ def _authorized(msg_or_cb: Message | CallbackQuery) -> bool:
 # ------------------------------------------------------------------
 
 def _draft_keyboard(draft_id: str) -> InlineKeyboardMarkup:
-    """Inline keyboard for approve/reject/edit a draft."""
+    """Inline keyboard for approve/reject/edit/detail a draft."""
     prefix = draft_id[:8]
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Approve", callback_data=f"approve:{prefix}"),
-        InlineKeyboardButton(text="Reject", callback_data=f"reject:{prefix}"),
-    ]])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Approve", callback_data=f"approve:{prefix}"),
+            InlineKeyboardButton(text="Edit", callback_data=f"edit:{prefix}"),
+        ],
+        [
+            InlineKeyboardButton(text="Detail", callback_data=f"detail:{prefix}"),
+            InlineKeyboardButton(text="Reject", callback_data=f"reject:{prefix}"),
+        ],
+    ])
 
 
 async def send_draft_notification(data: dict) -> None:
@@ -289,74 +297,40 @@ async def cmd_drafts(message: Message) -> None:
 # Callback handlers (inline keyboard actions)
 # ------------------------------------------------------------------
 
-@router.callback_query(F.data.startswith("approve:"))
-async def cb_approve(callback: CallbackQuery) -> None:
-    """Approve a draft via inline button and send the message to Matrix."""
-    if not _authorized(callback):
-        return
-    draft_prefix = callback.data.split(":")[1]
-    draft_id = await _resolve_draft_id(draft_prefix)
-    if not draft_id:
-        await callback.answer("Draft not found", show_alert=True)
-        return
-
-    # Fetch draft details before transitioning status
-    row = await _pool.fetchrow(
-        "SELECT room_id, draft_text FROM draft_replies WHERE id = $1 AND status = 'pending'",
-        draft_id,
-    )
-    if not row:
-        await callback.answer("Draft already processed", show_alert=True)
-        return
-
-    await _pool.execute(
-        "UPDATE draft_replies SET status = 'approved', reviewed_at = NOW(), reviewer_action = 'approve' WHERE id = $1",
-        draft_id,
-    )
-
-    # Actually send the approved message to Matrix
-    sent = await _send_approved_to_matrix(row["room_id"], row["draft_text"])
-    status_label = "APPROVED & SENT" if sent else "APPROVED (send failed)"
-
-    await callback.message.edit_text(
-        callback.message.text + f"\n\n<b>{status_label}</b>",
-        reply_markup=None,
-    )
-    await callback.answer("Approved" if sent else "Approved but send failed")
-
-
-@router.callback_query(F.data.startswith("reject:"))
-async def cb_reject(callback: CallbackQuery) -> None:
-    """Reject a draft via inline button."""
-    if not _authorized(callback):
-        return
-    draft_prefix = callback.data.split(":")[1]
-    draft_id = await _resolve_draft_id(draft_prefix)
-    if not draft_id:
-        await callback.answer("Draft not found", show_alert=True)
-        return
-
-    await _pool.execute(
-        "UPDATE draft_replies SET status = 'rejected' WHERE id = $1",
-        draft_id,
-    )
-    await callback.message.edit_text(
-        callback.message.text + "\n\n<b>REJECTED</b>",
-        reply_markup=None,
-    )
-    await callback.answer("Rejected")
-
-
 # ------------------------------------------------------------------
 # Inward chat (any text without command prefix)
 # ------------------------------------------------------------------
 
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message) -> None:
+    """Cancel edit mode."""
+    if not _authorized(message):
+        return
+    from .draft_callbacks import is_editing, pop_edit
+    if is_editing(message.chat.id):
+        pop_edit(message.chat.id)
+        await message.answer("Edit cancelled.")
+    else:
+        await message.answer("Nothing to cancel.")
+
+
 @router.message()
 async def inward_chat(message: Message) -> None:
-    """Route free-text messages through agent pipeline (inward mode)."""
+    """Route free-text messages through agent pipeline (inward mode).
+
+    If edit mode is active, intercept the message as edited draft text instead.
+    """
     if not _authorized(message):
         return
     if not message.text:
+        return
+
+    # Check if we're in edit mode for this chat
+    from .draft_callbacks import is_editing, pop_edit, handle_edit_text
+    chat_id = message.chat.id
+    if is_editing(chat_id):
+        edit_info = pop_edit(chat_id)
+        await handle_edit_text(message, edit_info["draft_id"])
         return
 
     # Send "thinking" indicator
