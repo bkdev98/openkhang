@@ -44,7 +44,7 @@ class ModeConfig:
             temperature=0.5,
             max_tokens=4096,
             use_tools=True,
-            tool_blacklist={"create_draft", "send_message"},
+            tool_blacklist={"send_message"},
             require_structured=False,
             max_iterations=10,
             timeout_seconds=120,

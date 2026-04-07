@@ -7,6 +7,11 @@ from .get_thread_messages_tool import GetThreadMessagesTool
 from .send_message_tool import SendMessageTool
 from .lookup_person_tool import LookupPersonTool
 from .create_draft_tool import CreateDraftTool
+from .list_drafts_tool import ListDraftsTool
+from .manage_draft_tool import ManageDraftTool
+from .search_events_tool import SearchEventsTool
+from .search_jira_tool import SearchJiraTool
+from .search_gitlab_tool import SearchGitLabTool
 
 __all__ = [
     "SearchKnowledgeTool",
@@ -17,4 +22,9 @@ __all__ = [
     "SendMessageTool",
     "LookupPersonTool",
     "CreateDraftTool",
+    "ListDraftsTool",
+    "ManageDraftTool",
+    "SearchEventsTool",
+    "SearchJiraTool",
+    "SearchGitLabTool",
 ]

@@ -261,6 +261,11 @@ class AgentPipeline:
             SendMessageTool,
             LookupPersonTool,
             CreateDraftTool,
+            ListDraftsTool,
+            ManageDraftTool,
+            SearchEventsTool,
+            SearchJiraTool,
+            SearchGitLabTool,
         )
         registry = ToolRegistry()
         registry.register(SearchKnowledgeTool(self._memory))
@@ -271,6 +276,11 @@ class AgentPipeline:
         registry.register(SendMessageTool(self._sender))
         registry.register(LookupPersonTool())
         registry.register(CreateDraftTool(self._drafts))
+        registry.register(ListDraftsTool(self._drafts))
+        registry.register(ManageDraftTool(self._drafts, self._sender))
+        registry.register(SearchEventsTool(self._drafts))
+        registry.register(SearchJiraTool())
+        registry.register(SearchGitLabTool())
         return registry
 
     def _init_skills(self) -> SkillRegistry:

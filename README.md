@@ -33,7 +33,7 @@ Google Chat ←→ mautrix bridge ←→ Synapse ←→ matrix-listener
 - **Outward**: Acts AS you to colleagues in Google Chat — replies in your voice/style, grounded by RAG. Learns from 114+ real style examples.
 - **Inward**: Acts AS your autonomous assistant via dashboard — searches memory, uses tools proactively, takes instructions. Powered by ReAct loop (10 iterations, 120s timeout).
 
-### Agent Pipeline (v2)
+### Agent Pipeline
 
 ```
 event → LLM Router (haiku, <500ms) → Context Strategy (parallel fetch) → Unified Loop → route
@@ -44,7 +44,6 @@ event → LLM Router (haiku, <500ms) → Context Strategy (parallel fetch) → U
                                         └─ fyi: sender only
 ```
 
-**Key improvements over v1:**
 - LLM-based routing replaces brittle regex classification
 - Group detection uses Matrix member count (not room name heuristics)
 - Thread-aware: responds when you're active in a thread

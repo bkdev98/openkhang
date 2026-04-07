@@ -86,10 +86,10 @@ class TestModeConfigPresets:
         assert config.use_tools is True
 
     def test_inward_config_blacklist(self):
-        """Inward mode should blacklist send/draft tools."""
+        """Inward mode should blacklist send_message only; create_draft is allowed."""
         config = ModeConfig.inward()
-        assert "create_draft" in config.tool_blacklist
         assert "send_message" in config.tool_blacklist
+        assert "create_draft" not in config.tool_blacklist
 
     def test_inward_config_temperature(self):
         """Inward mode should be more creative (higher temperature)."""
@@ -229,9 +229,9 @@ class TestToolCallingMode:
         tool_defs = call_kwargs["tools"]
         tool_names = [t["name"] for t in tool_defs]
 
-        # Should only have search, not draft or send_message
+        # send_message is blacklisted; create_draft is now allowed in inward mode
         assert "search" in tool_names
-        assert "create_draft" not in tool_names
+        assert "create_draft" in tool_names
         assert "send_message" not in tool_names
 
     @pytest.mark.asyncio
