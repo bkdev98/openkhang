@@ -1,6 +1,6 @@
 # openkhang
 
-Digital twin for your work persona — an AI agent that acts as you in Google Chat (outward mode) and assists you via a web dashboard (inward mode). Integrates Google Chat, Jira, Confluence, GitLab, and your source code into a unified memory-backed system.
+Digital twin for your work persona — an AI agent that acts as you in Google Chat (outward mode) and assists you via web dashboard (inward mode). Integrates Google Chat, Jira, Confluence, GitLab, and source code into a unified memory-backed system.
 
 ## Architecture
 
@@ -13,35 +13,63 @@ Google Chat ←→ mautrix bridge ←→ Synapse ←→ matrix-listener
              ▼                 ▼                   ▼                   ▼
        Knowledge          Mem0 + pgvector    Dual-Mode Agent      Dashboard
        Ingestion          (Memory Layer)     (Outward/Inward)   (FastAPI+HTMX)
-       Pipeline                │                   │               :8000
-  Jira/GitLab/Confluence       └───────┬───────────┘
-  Source Code (git diff)               ▼
-  → chunk → embed → store    Workflow Engine
-                             (YAML state machines, audit log)
+  Jira/GitLab/Confluence       │                   │               :8000
+  Source Code (git diff)       └───────┬───────────┘
+                                       ▼
+                              7-Layer Agent Pipeline
+                         ┌──────────────────────────┐
+                         │ 1. Channel Adapters       │
+                         │ 2. LLM Router (haiku)     │
+                         │ 3. Context Strategy       │
+                         │ 4. Tool Registry          │
+                         │ 5. Skill System           │
+                         │ 6. Unified Agent Loop     │
+                         │ 7. Response Router        │
+                         └──────────────────────────┘
 ```
 
 ### Dual-Mode Agent
 
 - **Outward**: Acts AS you to colleagues in Google Chat — replies in your voice/style, grounded by RAG. Learns from 114+ real style examples.
-- **Inward**: Acts AS your assistant via dashboard — reports, drafts, takes instructions. Can search your codebase.
+- **Inward**: Acts AS your autonomous assistant via dashboard — searches memory, uses tools proactively, takes instructions. Powered by ReAct loop (10 iterations, 120s timeout).
+
+### Agent Pipeline (v2)
+
+```
+event → LLM Router (haiku, <500ms) → Context Strategy (parallel fetch) → Unified Loop → route
+         │                              │                                  │
+         ├─ regex fast-path (social)    ├─ social: no context              ├─ outward: structured JSON
+         ├─ group detection (member_count) ├─ question: rag+code+sender+room  ├─ inward: ReAct tool loop
+         └─ thread awareness            ├─ request: rag+sender+room+thread └─ config-driven (ModeConfig)
+                                        └─ fyi: sender only
+```
+
+**Key improvements over v1:**
+- LLM-based routing replaces brittle regex classification
+- Group detection uses Matrix member count (not room name heuristics)
+- Thread-aware: responds when you're active in a thread
+- Parallel context pre-fetch reduces latency 20-30%
+- Identity-first prompts empower autonomous reasoning
+- Confidence modifiers configurable via YAML (no code changes)
 
 ### Behavioral Rules
 
 - **DM + social** (hi, thanks): Auto-reply
 - **DM + work question**: Confidence-gated (may draft for review)
-- **Group + social/humor**: Skip (Khanh doesn't reply to group banter)
+- **Group + social/humor**: Skip (router decides via LLM)
 - **Group + work/mention**: Draft for review
 - **Manager/Lead sender**: Always draft
-- **Room with no history**: Skip (only reply where you've chatted before)
+- **Thread you're in**: Always respond
+- **Room with no history**: Skip
 
 ### LLM Providers
 
-**Meridian** (Claude Max subscription proxy, $0 marginal cost) powers two things: agent replies AND memory extraction (claude-haiku-4-5-20251001 via OpenAI-compatible endpoint). Meridian auto-starts with the dashboard — no separate terminal needed.
+**Meridian** (Claude Max subscription proxy, $0 marginal cost) powers agent replies AND memory extraction (haiku via OpenAI-compatible endpoint). Falls back to Claude API if unavailable.
 
 ### Memory System
 
 Three-layer memory powered by Mem0 + Haiku 4.5 (via Meridian):
-- **Semantic**: Vector search (pgvector + bge-m3 via OpenRouter API) for knowledge retrieval
+- **Semantic**: Vector search (pgvector + bge-m3 via OpenRouter API)
 - **Episodic**: Append-only Postgres event log (chat, code, Jira, agent actions)
 - **Working**: In-memory session context with 30-min TTL
 
@@ -94,34 +122,92 @@ bash scripts/run-dashboard.sh
 
 ## Configuration
 
-### LLM (`env`)
+### LLM (`.env`)
 
 ```bash
 # Meridian proxy (Claude Max subscription, $0 marginal cost)
-# Powers TWO things: agent replies AND memory extraction (claude-haiku-4-5-20251001)
-# Auto-starts with dashboard if set. Falls back to ANTHROPIC_API_KEY if not set.
 MERIDIAN_URL=http://127.0.0.1:3456
 
-# Fallback only — Claude API (paid per-token, used if MERIDIAN_URL is not set)
+# Fallback — Claude API (paid per-token)
 ANTHROPIC_API_KEY=sk-ant-...
 
-# Embeddings — OpenRouter API (OpenAI-compatible, BAAI/bge-m3)
+# Embeddings — OpenRouter API (BAAI/bge-m3)
 EMBEDDING_API_KEY=sk-or-...
-EMBEDDING_API_URL=https://openrouter.ai/api/v1   # default
-EMBEDDING_MODEL=BAAI/bge-m3                       # default
+EMBEDDING_API_URL=https://openrouter.ai/api/v1
+EMBEDDING_MODEL=BAAI/bge-m3
 ```
 
 ### Persona (`config/persona.yaml`)
-Twin's identity, communication style, safety rules. **Edits take effect on next message** — no restart needed.
-
-### Projects (`config/projects.yaml`)
-Source code repositories for knowledge ingestion. Business logic docs and API specs are prioritized.
+Twin's identity, communication style, safety rules. Edits take effect on next message — no restart needed.
 
 ### Confidence (`config/confidence_thresholds.yaml`)
-Per-room thresholds for auto-reply. Default 0.75. Group chat work messages always go to draft.
+Per-room thresholds and scoring modifiers. All modifiers are YAML-configurable:
+```yaml
+default_threshold: 0.75
+modifiers:
+  many_memories: 0.10      # bonus: 3+ grounding memories
+  deadline_risk: -0.20     # penalty: timeline questions
+  unknown_sender: -0.15    # penalty: no prior interactions
+  social_dm: 0.25          # bonus: social in DM
+  group_social_skip: -0.90 # penalty: social in group
+  no_history: -0.90        # penalty: no room history
+  cautious_sender: -0.30   # penalty: manager/lead sender
+  high_priority_boost: 0.15
+  low_priority_penalty: -0.10
+```
+
+### Projects (`config/projects.yaml`)
+Source code repositories for knowledge ingestion.
 
 ### Workflows (`config/workflows/*.yaml`)
 YAML state machines for cross-tool automation (chat→jira→code→pipeline).
+
+## Project Structure
+
+```
+openkhang/
+├── services/
+│   ├── memory/           # Mem0 + pgvector + episodic store
+│   ├── ingestion/        # Chat, Jira, GitLab, Confluence, Code ingestors
+│   ├── agent/            # 7-layer agent pipeline
+│   │   ├── llm_router.py         # LLM-based routing (haiku + regex fallback)
+│   │   ├── context_strategy.py   # Parallel context pre-fetch per intent
+│   │   ├── agent_loop.py         # Unified execution (config-driven modes)
+│   │   ├── pipeline.py           # Main orchestrator
+│   │   ├── classifier.py         # Regex fallback classifier
+│   │   ├── confidence.py         # Config-driven confidence scoring
+│   │   ├── prompt_builder.py     # System + user message assembly
+│   │   ├── llm_client.py         # Multi-provider (Meridian → Claude API)
+│   │   ├── tool_calling_loop.py  # ReAct loop (10 iters, 120s timeout)
+│   │   ├── tool_registry.py      # Tool discovery + execution
+│   │   ├── skill_registry.py     # Skill matching + delegation
+│   │   ├── tools/                # 8 tool wrappers
+│   │   ├── skills/               # 3 skills (outward, inward, send-as-owner)
+│   │   ├── prompts/              # System prompts + router prompt
+│   │   ├── channel_adapter*.py   # Channel normalization (Matrix, Dashboard, Telegram)
+│   │   ├── response_router.py    # Response routing by channel
+│   │   └── tests/                # 175 tests (router, context, loop, integration)
+│   ├── workflow/         # YAML state machine engine + audit log
+│   └── dashboard/        # FastAPI + HTMX + SSE (inbox/agent relay)
+├── config/
+│   ├── persona.yaml                  # Twin identity + style
+│   ├── projects.yaml                 # Code repos to index
+│   ├── confidence_thresholds.yaml    # Thresholds + modifiers
+│   ├── style_examples.jsonl          # Real sent messages (few-shot)
+│   └── workflows/                    # YAML workflow definitions
+├── scripts/
+│   ├── onboard.sh                    # First-time setup
+│   ├── setup-bridge.sh               # Synapse + mautrix bridge
+│   ├── setup-memory.sh               # Postgres + Redis
+│   ├── run-dashboard.sh              # Start web UI
+│   ├── matrix-listener.py            # Real-time chat listener
+│   ├── seed-code.py                  # Index source code
+│   ├── seed-knowledge.py             # Seed Jira/GitLab/chat
+│   └── full-chat-seed.py             # Full Matrix history sync
+├── docs/              # Project documentation (7 files)
+├── plans/             # Implementation plans + reports
+└── docker-compose.yml # Infrastructure (Postgres, Redis)
+```
 
 ## Knowledge Sources
 
@@ -135,49 +221,10 @@ YAML state machines for cross-tool automation (chat→jira→code→pipeline).
 | Source code | `git diff` incremental | Every 10 min |
 | Style examples | Matrix full-history sync | On-demand |
 
-## Project Structure
-
-```
-openkhang/
-├── services/
-│   ├── memory/        # Mem0 + pgvector + episodic store
-│   ├── ingestion/     # Chat, Jira, GitLab, Confluence, Code ingestors
-│   ├── agent/         # 4-layer agentic architecture
-│   │   ├── tools/     # 7 tool wrappers (search, send, lookup, etc)
-│   │   ├── skills/    # 3 skill implementations (outward, inward, send-as-khanh)
-│   │   ├── channel_adapter*.py   # Channel normalization (Matrix, Dashboard, Telegram)
-│   │   ├── response_router.py    # Response routing by channel
-│   │   ├── tool_registry.py      # Tool discovery + execution
-│   │   ├── skill_registry.py     # Skill matching + delegation
-│   │   ├── tool_calling_loop.py  # ReAct loop for Claude tool_use
-│   │   └── pipeline.py           # Main orchestrator
-│   ├── workflow/      # YAML state machine engine + audit log
-│   └── dashboard/     # FastAPI + HTMX + SSE (inbox/agent relay)
-├── config/
-│   ├── persona.yaml            # Twin identity + style
-│   ├── projects.yaml           # Code repos to index
-│   ├── confidence_thresholds.yaml
-│   ├── style_examples.jsonl    # Your real sent messages (few-shot)
-│   └── workflows/              # YAML workflow definitions
-├── scripts/
-│   ├── onboard.sh              # First-time setup
-│   ├── setup-bridge.sh         # Synapse + mautrix bridge
-│   ├── setup-memory.sh         # Postgres + Redis
-│   ├── run-dashboard.sh        # Start web UI
-│   ├── matrix-listener.py      # Real-time chat listener
-│   ├── seed-code.py            # Index source code
-│   ├── seed-knowledge.py       # Seed Jira/GitLab/chat
-│   └── full-chat-seed.py       # Full Matrix history sync
-├── archive/           # Claude Code plugin (skills, agents, hooks) — reference only
-├── docs/              # Project documentation (7 files)
-├── plans/             # Implementation plans + reports
-└── docker-compose.yml # Infrastructure (Postgres, Redis)
-```
-
 ## Development
 
 ```bash
-# Run tests (78 passing)
+# Run tests (175 passing)
 services/.venv/bin/python3 -m pytest services/agent/tests/ -v
 
 # Dashboard with hot reload
