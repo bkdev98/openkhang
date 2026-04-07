@@ -22,11 +22,6 @@ logger = logging.getLogger(__name__)
 _RAG_LIMIT = 10
 _SENDER_CONTEXT_LIMIT = 5
 
-# Tools excluded from inward tool-calling loop:
-# - create_draft: internal routing, not user-facing
-# - send_message: only SendAsOwnerSkill may send (prevents prompt injection auto-sending)
-_EXCLUDED_INWARD_TOOLS = {"create_draft", "send_message"}
-
 
 class InwardQuerySkill(BaseSkill):
     """Answer inward-mode questions using LLM tool-calling (ReAct loop).
@@ -52,8 +47,8 @@ class InwardQuerySkill(BaseSkill):
         return {"mode": "inward"}
 
     async def execute(self, event: dict, tools: Any, llm: Any, context: SkillContext) -> Any:
+        from ..agent_loop import AgentLoop, ModeConfig
         from ..pipeline import AgentResult
-        from ..tool_calling_loop import run_tool_calling_loop
 
         t0 = time.monotonic()
         body = event.get("body", "").strip()
@@ -61,13 +56,9 @@ class InwardQuerySkill(BaseSkill):
         trace = context.trace
 
         # Build prompt — LLM will actively search via tools before answering
-        # Pre-seed with sender context so LLM knows who's asking
-        sender_id = event.get("sender_id", "")
-        sender_context: list[dict] = []
-        if sender_id:
-            sender_context = (
-                await self._memory.get_related(sender_id, agent_id="inward")
-            )[:_SENDER_CONTEXT_LIMIT]
+        # Pre-seed with sender context so LLM knows who's asking (from pre-fetched bundle)
+        bundle = context.context_bundle
+        sender_context: list[dict] = bundle.sender_context if bundle else []
         if trace:
             trace.record_rag(sender_context, label="sender_context")
 
@@ -75,59 +66,42 @@ class InwardQuerySkill(BaseSkill):
             mode="inward", intent=intent, memories=[],
             sender_context=sender_context, event=event,
             style_examples=None, chat_history=context.chat_history, room_messages=None,
+            tool_registry=context.tool_registry,
         )
         if trace:
             trace.record_prompt(messages)
 
-        # Instruct LLM to use tools before answering — prevents generic replies
-        messages.append({
-            "role": "user",
-            "content": (
-                "[System: You have access to search tools. ALWAYS use search_knowledge "
-                "and/or search_code before answering questions about work, projects, "
-                "code, or colleagues. Do NOT answer from general knowledge alone — "
-                "search the owner's memory first.]"
-            ),
-        })
-
-        # Expose all safe inward tools (exclude routing-only tools)
-        tool_defs = [
-            t for t in tools.list_descriptions()
-            if t["name"] not in _EXCLUDED_INWARD_TOOLS
-        ]
-
         try:
-            result = await run_tool_calling_loop(
-                llm_client=llm,
+            loop = AgentLoop()
+            loop_result = await loop.run(
+                config=ModeConfig.inward(),
                 messages=messages,
-                tools=tool_defs,
-                tool_executor=tools.execute,
-                temperature=0.5,
-                max_tokens=4096,
+                llm_client=llm,
+                tools=tools,
             )
             if trace:
                 trace.record_llm_call(
-                    model=result.model_used, tokens=result.tokens_used,
+                    model=loop_result.model_used, tokens=loop_result.tokens_used,
                     latency_ms=int((time.monotonic() - t0) * 1000),
                     temperature=0.5,
                 )
-                for tc in result.tool_calls:
+                for tc in loop_result.tool_calls:
                     trace.record_tool_call(
                         tc.tool_name, tc.tool_input, tc.result, tc.success,
                     )
-                trace.add_step("tool_loop_summary", iterations=result.iterations, total_tool_calls=len(result.tool_calls))
+                trace.add_step("tool_loop_summary", iterations=loop_result.iterations, total_tool_calls=len(loop_result.tool_calls))
             return AgentResult(
                 mode="inward",
                 intent=intent,
-                reply_text=result.text,
+                reply_text=loop_result.text,
                 confidence=0.5,  # inward mode doesn't score confidence
                 action="inward_response",
                 latency_ms=int((time.monotonic() - t0) * 1000),
-                tokens_used=result.tokens_used,
+                tokens_used=loop_result.tokens_used,
             )
         except Exception as exc:
             logger.warning(
-                "Tool-calling loop failed for inward query, falling back to direct RAG: %s", exc
+                "AgentLoop failed for inward query, falling back to direct RAG: %s", exc
             )
             return await self._fallback_direct(event, llm, context, intent, t0)
 
@@ -147,14 +121,14 @@ class InwardQuerySkill(BaseSkill):
         from ..pipeline import AgentResult
 
         body = event.get("body", "").strip()
-        memories = await self._gather_memories(body)
+        # Use pre-fetched memories from bundle when available; fall back to direct gather
+        bundle = context.context_bundle
+        if bundle and bundle.memories:
+            memories = bundle.memories + bundle.code_results
+        else:
+            memories = await self._gather_memories(body)
 
-        sender_id = event.get("sender_id", "")
-        sender_context: list[dict] = []
-        if sender_id:
-            sender_context = (
-                await self._memory.get_related(sender_id, agent_id="inward")
-            )[:_SENDER_CONTEXT_LIMIT]
+        sender_context: list[dict] = bundle.sender_context if bundle else []
 
         messages = context.prompt_builder.build(
             mode="inward", intent=intent, memories=memories,

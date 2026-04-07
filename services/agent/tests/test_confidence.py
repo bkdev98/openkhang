@@ -124,3 +124,109 @@ class TestAutoSend:
 
     def test_get_threshold_graduated(self, scorer):
         assert scorer.get_threshold("!graduated:localhost") == pytest.approx(0.65)
+
+
+class TestPriorityModifiers:
+    """Test priority-based confidence adjustments."""
+
+    def test_high_priority_boost(self, scorer):
+        """High priority should boost confidence."""
+        resp = make_response(0.7)
+        result = scorer.score(resp, [], {}, priority="high")
+        assert result > 0.7
+
+    def test_low_priority_penalty(self, scorer):
+        """Low priority should penalize confidence."""
+        resp = make_response(0.7)
+        result = scorer.score(resp, [], {}, priority="low")
+        assert result < 0.7
+
+    def test_normal_priority_no_change(self, scorer):
+        """Normal priority should not change score."""
+        resp = make_response(0.7)
+        result = scorer.score(resp, [], {}, priority="normal")
+        assert result == pytest.approx(0.7, abs=0.01)
+
+    def test_high_priority_with_memories_combined(self, scorer):
+        """High priority + memories should compound bonuses."""
+        resp = make_response(0.7)
+        result = scorer.score(
+            resp, make_memories(3), {}, priority="high"
+        )
+        # Should have both memory bonus and priority boost
+        assert result > 0.7 + 0.10  # At least memory bonus
+
+
+class TestGroupChatBehavior:
+    """Test confidence scoring in group chat context."""
+
+    def test_social_in_group_skip(self, scorer):
+        """Social intent in group should skip (very low confidence)."""
+        resp = make_response(0.8)
+        result = scorer.score(resp, [], {}, intent="social", is_group=True)
+        # Should apply no_history penalty which is -0.90
+        assert result < 0.5
+
+    def test_social_in_dm_boost(self, scorer):
+        """Social intent in DM should boost confidence."""
+        resp = make_response(0.7)
+        result = scorer.score(resp, [], {}, intent="social", is_group=False)
+        # Should apply social_dm bonus which is +0.25
+        assert result > 0.7
+
+    def test_work_intent_in_group_normal(self, scorer):
+        """Work intent (question/request) in group should not penalize."""
+        resp = make_response(0.8)
+        result = scorer.score(
+            resp, [], {}, intent="question", is_group=True
+        )
+        # Should not have the group social penalty
+        assert result == pytest.approx(0.8, abs=0.01)
+
+    def test_fyi_in_group_skip(self, scorer):
+        """FYI intent in group should skip (very low confidence)."""
+        resp = make_response(0.8)
+        result = scorer.score(resp, [], {}, intent="fyi", is_group=True)
+        # Should apply no_history penalty
+        assert result < 0.5
+
+
+class TestConfigDrivenModifiers:
+    """Test that modifiers are loaded from config."""
+
+    def test_modifiers_loaded_from_config(self, scorer):
+        """Modifiers should be loaded from config YAML."""
+        # Scorer fixture loads config with specific modifiers
+        # Check that a custom modifier is available
+        assert scorer._modifiers is not None
+        assert isinstance(scorer._modifiers, dict)
+        assert len(scorer._modifiers) > 0
+
+    def test_config_overrides_defaults(self):
+        """Config modifiers should override hard-coded defaults."""
+        with patch.object(
+            ConfidenceScorer,
+            "_load_config",
+            return_value={
+                "default_threshold": 0.85,
+                "graduated_spaces": {},
+                "modifiers": {
+                    "many_memories": 0.20,  # Override default 0.10
+                    "deadline_risk": -0.30,  # Override default -0.20
+                },
+            },
+        ):
+            scorer = ConfidenceScorer()
+            resp = make_response(0.7)
+            result = scorer.score(resp, make_memories(3), {})
+            # Should use config value 0.20 instead of default 0.10
+            assert result == pytest.approx(0.7 + 0.20, abs=0.01)
+
+    def test_missing_yaml_uses_defaults(self):
+        """Missing YAML should fall back to hard-coded defaults."""
+        with patch.object(ConfidenceScorer, "_load_config", return_value={}):
+            scorer = ConfidenceScorer()
+            resp = make_response(0.7)
+            result = scorer.score(resp, make_memories(3), {})
+            # Should use default 0.10
+            assert result == pytest.approx(0.7 + 0.10, abs=0.01)

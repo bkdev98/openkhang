@@ -1,3 +1,6 @@
+# NOTE: This classifier is now the FALLBACK path. Primary routing is via LLMRouter (llm_router.py).
+# This module is used when LLM router fails (timeout, network, parsing error).
+
 """Mode and intent classifier for the dual-mode agent pipeline.
 
 Mode classification: determines if this event is outward (reply AS the owner to colleagues)

@@ -12,8 +12,8 @@ from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
-MAX_ITERATIONS = 3
-LOOP_TIMEOUT_SECONDS = 30
+MAX_ITERATIONS = 10
+LOOP_TIMEOUT_SECONDS = 120
 
 
 @dataclass

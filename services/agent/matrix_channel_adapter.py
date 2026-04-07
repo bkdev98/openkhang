@@ -72,7 +72,18 @@ class MatrixChannelAdapter(ChannelAdapter):
         thread_event_id = payload.get("thread_event_id", "")
         event_id = str(row.get("id", ""))
 
-        is_group = _detect_group_chat(room_name)
+        # Extract member count from payload or metadata room state; fallback to name heuristic.
+        # Matrix room member counts may be embedded in metadata under 'member_count' or
+        # 'room_member_count' by the relay layer, or in payload for richer events.
+        member_count = int(
+            payload.get("member_count")
+            or metadata.get("member_count")
+            or metadata.get("room_member_count")
+            or 0
+        )
+        # Group if explicit count > 2; otherwise fall back to room name heuristic
+        is_group = member_count > 2 if member_count else _detect_group_chat(room_name)
+
         formatted_body = payload.get("formatted_body", "")
         is_mentioned = detect_mention(body, formatted_body)
 
@@ -87,6 +98,7 @@ class MatrixChannelAdapter(ChannelAdapter):
             event_id=event_id,
             is_group=is_group,
             is_mentioned=is_mentioned,
+            member_count=member_count,
             raw={"row": dict(row), "payload": payload, "metadata": metadata},
         )
 

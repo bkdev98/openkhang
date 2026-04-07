@@ -11,3 +11,15 @@ graduated_spaces: {}
   # Example after graduation:
   # "!abc123:localhost": 0.70   # 1:1 DM with trusted colleague
   # "!def456:localhost": 0.75   # small team channel
+
+# Confidence modifiers applied on top of LLM self-assessed score
+modifiers:
+  many_memories: 0.10
+  deadline_risk: -0.20
+  unknown_sender: -0.15
+  social_dm: 0.25
+  no_history: -0.90
+  cautious_sender: -0.30
+  group_social_skip: -0.90
+  high_priority_boost: 0.15
+  low_priority_penalty: -0.10

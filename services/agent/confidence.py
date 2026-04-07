@@ -2,6 +2,9 @@
 
 Scores are 0.0-1.0. Higher = more confident the reply is safe to auto-send.
 Default threshold is 0.85 (conservative). Per-room thresholds loaded from config.
+
+Modifiers are loaded from config/confidence_thresholds.yaml under the `modifiers:`
+section. If that section is missing, hard-coded defaults provide backward compatibility.
 """
 
 from __future__ import annotations
@@ -19,26 +22,47 @@ logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "confidence_thresholds.yaml"
 
-# Confidence modifiers applied on top of LLM self-assessed score
-MODIFIER_MANY_MEMORIES = +0.10     # 3+ relevant memories found
-MODIFIER_DEADLINE_RISK = -0.20     # message asks about timeline/deadline
-MODIFIER_UNKNOWN_SENDER = -0.15    # no prior interactions (reduced from -0.30)
-MODIFIER_LANGUAGE_MISMATCH = -0.10 # message language differs from persona primary
-MODIFIER_SOCIAL_INTENT = +0.25     # social messages (hi, thanks, emoji) are low-risk
-MODIFIER_GROUP_SOCIAL_SKIP = -0.90  # social/humor in group chats → skip (don't reply)
-MODIFIER_CAUTIOUS_SENDER = -0.30   # messages from managers/leads → always draft
-MODIFIER_NO_HISTORY = -0.90        # never chatted in this space before → skip
+# Hard-coded defaults — used only when YAML is missing or has no `modifiers:` section
+_DEFAULT_MODIFIERS: dict[str, float] = {
+    "many_memories": 0.10,
+    "deadline_risk": -0.20,
+    "unknown_sender": -0.15,
+    "social_dm": 0.25,
+    "no_history": -0.90,
+    "cautious_sender": -0.30,
+    "group_social_skip": -0.90,
+    "high_priority_boost": 0.15,
+    "low_priority_penalty": -0.10,
+}
+
+# Keep public constants for backward compatibility with existing tests
+MODIFIER_MANY_MEMORIES = _DEFAULT_MODIFIERS["many_memories"]
+MODIFIER_DEADLINE_RISK = _DEFAULT_MODIFIERS["deadline_risk"]
+MODIFIER_UNKNOWN_SENDER = _DEFAULT_MODIFIERS["unknown_sender"]
+MODIFIER_LANGUAGE_MISMATCH = -0.10  # not in YAML; kept as module-level constant
+MODIFIER_SOCIAL_INTENT = _DEFAULT_MODIFIERS["social_dm"]
+MODIFIER_GROUP_SOCIAL_SKIP = _DEFAULT_MODIFIERS["no_history"]
+MODIFIER_CAUTIOUS_SENDER = _DEFAULT_MODIFIERS["cautious_sender"]
+MODIFIER_NO_HISTORY = _DEFAULT_MODIFIERS["no_history"]
 
 
 class ConfidenceScorer:
     """Score LLM responses and decide whether to auto-send or queue as draft.
 
-    Loads per-room thresholds from config/confidence_thresholds.yaml.
-    Falls back to default_threshold (0.85) if file missing or room not listed.
+    Loads per-room thresholds and modifiers from config/confidence_thresholds.yaml.
+    Falls back to default_threshold (0.85) and _DEFAULT_MODIFIERS if file missing.
     """
 
     def __init__(self) -> None:
         self._config = self._load_config()
+        self._modifiers: dict[str, float] = {
+            **_DEFAULT_MODIFIERS,
+            **({k: float(v) for k, v in self._config.get("modifiers", {}).items()}),
+        }
+
+    def _mod(self, key: str, default: float) -> float:
+        """Read a named modifier, falling back to supplied default."""
+        return self._modifiers.get(key, default)
 
     def score(
         self,
@@ -49,55 +73,66 @@ class ConfidenceScorer:
         sender_known: bool = True,
         intent: str = "",
         has_history_in_room: bool = True,
+        priority: str = "normal",
+        is_group: bool = False,
     ) -> float:
         """Compute final confidence score for a generated reply.
 
         Args:
             llm_response: Parsed LLM output including self-assessed confidence.
             memories: RAG results used in this reply.
-            event: Original event dict (used for language check).
+            event: Original event dict (used for language/sender checks).
             has_deadline_risk: True if message contains deadline/timeline keywords.
             sender_known: False if no prior interactions exist for this sender.
+            intent: Classified intent label.
+            has_history_in_room: False if the room has no prior history.
+            priority: Router-assigned priority — 'high' | 'normal' | 'low'.
+            is_group: Whether the message is in a group/multi-person room.
 
         Returns:
             Clipped float in [0.0, 1.0].
         """
         base = llm_response.confidence
-        is_group = self._is_group_chat(event)
 
         # Bonus: many grounding memories available
         if len(memories) >= 3:
-            base += MODIFIER_MANY_MEMORIES
+            base += self._mod("many_memories", 0.10)
 
         # Penalty: message asks about commitments/timelines
         if has_deadline_risk:
-            base += MODIFIER_DEADLINE_RISK
+            base += self._mod("deadline_risk", -0.20)
 
         # Penalty: sender is unknown (higher risk of misrepresentation)
         if not sender_known:
-            base += MODIFIER_UNKNOWN_SENDER
+            base += self._mod("unknown_sender", -0.15)
 
         # Group chat logic: reply to work/mentions, SKIP social/humor
         if is_group:
             if intent in ("social", "fyi"):
-                base += MODIFIER_GROUP_SOCIAL_SKIP  # don't reply to social in groups
+                base += self._mod("group_social_skip", -0.90)  # social in groups → skip
             # work questions/requests in groups → normal confidence (draft if unsure)
         else:
             # DM: social messages are safe to auto-reply
             if intent in ("social", "fyi"):
-                base += MODIFIER_SOCIAL_INTENT
+                base += self._mod("social_dm", 0.25)
 
         # Penalty: never chatted in this space → skip entirely
         if not has_history_in_room:
-            base += MODIFIER_NO_HISTORY
+            base += self._mod("no_history", -0.90)
 
         # Penalty: sender title suggests manager/lead (from room display name)
         if self._is_cautious_sender(event):
-            base += MODIFIER_CAUTIOUS_SENDER
+            base += self._mod("cautious_sender", -0.30)
 
         # Penalty: detected language mismatch (crude heuristic)
         if self._language_mismatch(event.get("body", "")):
             base += MODIFIER_LANGUAGE_MISMATCH
+
+        # Priority adjustments from LLM router
+        if priority == "high":
+            base += self._mod("high_priority_boost", 0.15)
+        elif priority == "low":
+            base += self._mod("low_priority_penalty", -0.10)
 
         return max(0.0, min(1.0, base))
 
@@ -129,45 +164,18 @@ class ConfidenceScorer:
             return float(graduated[room_id])
         return float(self._config.get("default_threshold", 0.85))
 
-    def _is_group_chat(self, event: dict) -> bool:
-        """Heuristic: detect group chats by room name patterns.
-
-        Group rooms typically have descriptive names with keywords like 'team',
-        hyphens, or organizational patterns. DM rooms have person names (no such keywords).
-        Since DM room names are now resolved from member display names, we can't
-        simply check if room_name exists — must look for group-specific indicators.
-        """
-        room_name = event.get("room_name", "")
-        if not room_name:
-            return False
-        rn_lower = room_name.lower()
-        # Group indicators: organizational keywords, hyphens (project-name), brackets
-        group_keywords = ("team", "group", "channel", "chat", "dev", "squad", "all", "general")
-        if any(kw in rn_lower for kw in group_keywords):
-            return True
-        # Rooms with " - " separator are often org-structured groups (e.g., "ITC - App Dev")
-        # but person names like "NGUYỄN VĂN A" don't use " - "
-        if " - " in room_name:
-            return True
-        return False
-
     def _is_cautious_sender(self, event: dict) -> bool:
         """Check if sender title (from room display) contains manager/lead keywords."""
-        # The sender display name in Google Chat often includes title
-        # e.g. "TRẦN ĐÌNH CHƯƠNG - ITC - App Dev - Manager - Mobile Engineering"
         sender = event.get("sender_id", "") + " " + event.get("sender", "")
-        room_name = event.get("room_name", "")
-        # Check persona config for cautious titles
         cautious = ["Manager", "Lead", "Director", "VP", "Head", "Chief"]
         check_text = sender.lower()
         return any(title.lower() in check_text for title in cautious)
 
     def _language_mismatch(self, body: str) -> bool:
-        """Very crude check: if body is all-ASCII with no Vietnamese chars,
-        assume language mismatch is unlikely. Only flag when body contains
-        a script that is clearly not Vietnamese or English.
+        """Very crude check: only flag CJK scripts as language mismatch.
+
+        Vietnamese uses Latin-based script, so no penalty for those messages.
         """
-        # For now keep this conservative — only flag CJK scripts
         for ch in (body or ""):
             cp = ord(ch)
             # CJK Unified Ideographs (Chinese/Japanese/Korean)
@@ -191,3 +199,7 @@ class ConfidenceScorer:
     def reload_config(self) -> None:
         """Reload thresholds from disk (useful after manual edits)."""
         self._config = self._load_config()
+        self._modifiers = {
+            **_DEFAULT_MODIFIERS,
+            **({k: float(v) for k, v in self._config.get("modifiers", {}).items()}),
+        }

@@ -231,7 +231,7 @@ projects:
 
 **Purpose:** Process message via skills + tools → generate drafts → route responses
 
-**Agentic Architecture (4 layers):**
+**Agentic Architecture (4 layers + improvements):**
 
 1. **Channel Adapters** (normalize inbound, route outbound)
    - `ChannelAdapter` ABC & `CanonicalMessage` format (transport-agnostic)
@@ -239,56 +239,82 @@ projects:
    - `DashboardChannelAdapter` — Web dashboard (twin chat)
    - `TelegramChannelAdapter` — Telegram (future)
 
-2. **Tool Registry** (thin wrappers around services)
+2. **LLM Router** (intelligent message routing)
+   - `LLMRouter` — Fast LLM-based routing (haiku-class) + regex fast-path
+   - Returns: `{ mode, intent, should_respond, priority, reasoning }`
+   - Fixes group detection (member_count > 2 from Matrix state vs room name heuristics)
+   - Thread-aware: owner participation triggers auto-response
+
+3. **Context Strategy Engine** (parallel context pre-fetching)
+   - `ContextStrategy` — Intent-driven context resolution
+   - `ContextBundle` — Pre-fetched context (memories, code, sender, room messages)
+   - Parallel fetch via `asyncio.gather` reduces latency 20-30%
+   - Per-intent context requirements (social = none, question = rag+code+sender+room)
+
+4. **Tool Registry** (thin wrappers around services)
    - `BaseTool` ABC + `ToolRegistry` (ordered execution)
    - 7 tools: search_knowledge, search_code, create_draft, send_message, lookup_person, get_sender_context, get_room_history
 
-3. **Skill System** (deterministic mode+intent→skill matching)
+5. **Skill System** (deterministic mode+intent→skill matching)
    - `BaseSkill` ABC + `SkillRegistry` (first match wins)
    - 3 skills:
      * `OutwardReplySkill` — Deterministic draft generation (safety-critical)
      * `InwardQuerySkill` — Claude tool_use for dynamic tool selection
      * `SendAsKhanhSkill` — Execute send action from approved draft
 
-4. **Response Router** (dispatch results to adapters)
+6. **Unified Agent Loop** (config-driven execution)
+   - `AgentLoop` — Single execution path for both outward/inward modes
+   - Mode config controls: system prompt, temperature, tool access, iterations, timeout
+   - Outward: structured JSON, 0.3 temp, no tools, 1 iteration, 60s timeout
+   - Inward: free-form text, 0.5 temp, safe tools, 10 iterations, 120s timeout
+
+7. **Response Router** (dispatch results to adapters)
    - `ResponseRouter` — Registry + dispatcher by channel
 
 **Key Components:**
-- `pipeline.py` — Main orchestrator; dispatch to skills via registry, creates trace per request
-- `classifier.py` — Message classification (work/question/social/humor/greeting/fyi)
-- `confidence.py` — Confidence scoring + modifiers (room, sender, history)
+- `pipeline.py` — Main orchestrator; wire router → context → skill → response
+- `llm_router.py` — LLM-based message routing with fallback
+- `context_strategy.py` — Parallel context pre-fetching per intent
+- `agent_loop.py` — Unified execution loop (config-driven modes)
+- `confidence.py` — Confidence scoring + config-driven modifiers
 - `prompt_builder.py` — System + user prompts with RAG context
 - `llm_client.py` — Multi-provider LLM: Meridian (default) > Claude API (fallback)
 - `tool_calling_loop.py` — ReAct loop for Claude tool_use (inward mode only)
 - `draft_queue.py` — Manages pending/approved/edited drafts
 - `trace_collector.py` — Accumulates pipeline steps (RAG, prompts, LLM calls, tool calls) for observability
 
-**Pipeline Stages (Skill-Driven):**
+**Pipeline Stages (Improved Flow):**
 
 ```
 1. Channel Adapter normalizes inbound to CanonicalMessage
    ↓
-2. SkillRegistry matches mode+intent+body_pattern → BaseSkill
+2. LLM Router evaluates: body, room metadata, thread context, sender info
+   ├─ regex fast-path → social? skip LLM
+   └─ LLM call → RouterResult (mode, intent, should_respond, priority)
    ↓
-3. Skill executes:
+3. Early exit if should_respond=False (group noise, etc)
+   ↓
+4. Context Strategy resolves intent → parallel fetch ContextBundle
+   ├─ social → {} (no context)
+   ├─ question → {rag, code, sender, room}
+   ├─ request → {rag, sender, room, thread}
+   └─ other → {rag, sender}
+   ↓
+5. SkillRegistry matches mode+intent+body → BaseSkill
+   ↓
+6. Skill executes (receives ContextBundle + RouterResult):
    
    **Outward Mode (reply-gen):**
-     a. Classify message (work/question/social/etc)
-     b. Search memory (semantic + episodic context)
-     c. Build prompt (system + RAG context + user)
-     d. Call LLM via Meridian or Claude API
-     e. Score confidence + apply modifiers
-     f. Decide: auto-send vs draft
-     g. Enqueue in draft_replies or send immediately
+     a. Use ContextBundle instead of fetching
+     b. Build prompt (system + RAG context + user)
+     c. Call AgentLoop (config: structured JSON, 0.3 temp, no tools)
+     d. Score confidence + apply priority-based modifiers
+     e. Decide: auto-send vs draft (router.should_respond + confidence)
+     f. Enqueue in draft_replies or send immediately
    
    **Inward Mode (query):**
-     a. Build system prompt (assistant mode, safety rules)
-     b. Start ReAct tool-calling loop:
-        • Call LLM with Claude tool_use
-        • Parse tool_use blocks
-        • Execute tools via ToolRegistry
-        • Re-feed tool results to LLM
-        • Repeat until no more tool calls
+     a. Build system prompt with tool descriptions
+     b. Call AgentLoop (config: free-form, 0.5 temp, safe tools, 10 iters)
      c. Return final text response
    
    **Send Mode (approved drafts):**
@@ -296,9 +322,9 @@ projects:
      b. Call ToolRegistry.send_message() 
      c. Log to episodic store
    
-4. ResponseRouter dispatches AgentResult to appropriate adapter
+7. ResponseRouter dispatches AgentResult to appropriate adapter
    ↓
-5. Adapter sends via Matrix/Dashboard/Telegram/etc
+8. Adapter sends via Matrix/Dashboard/Telegram/etc
 ```
 
 **Confidence Scoring:**

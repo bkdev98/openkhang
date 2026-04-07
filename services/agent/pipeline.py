@@ -22,9 +22,11 @@ from ..memory.config import MemoryConfig
 from .classifier import Classifier
 from .confidence import ConfidenceScorer
 from .draft_queue import DraftQueue
+from .llm_router import LLMRouter
 from .llm_client import LLMClient
 from .matrix_sender import MatrixSender
 from .prompt_builder import PromptBuilder
+from .context_strategy import ContextStrategy, ContextBundle
 from .skill_registry import SkillContext, SkillRegistry
 from .trace_collector import TraceCollector, save_trace
 
@@ -73,11 +75,13 @@ class AgentPipeline:
         self._drafts = draft_queue
         self._sender = matrix_sender
         self._classifier = Classifier()
+        self._router = LLMRouter(llm_client)
         self._prompt_builder = PromptBuilder()
         self._scorer = ConfidenceScorer()
         self._style_examples = self._load_style_examples()
         self._tools = self._init_tools()
         self._skills_registry = self._init_skills()
+        self._context_strategy = ContextStrategy(self._memory)
 
     @classmethod
     def from_env(cls) -> "AgentPipeline":
@@ -143,10 +147,33 @@ class AgentPipeline:
             )
 
         try:
-            mode = self._classifier.classify_mode(event)
-            intent = self._classifier.classify_intent(body, mode)
-            trace.record_classification(mode, intent)
-            logger.debug("Event classified: mode=%s intent=%s", mode, intent)
+            # Primary routing: LLM router (haiku, fast, structured)
+            router_result = await self._router.route(event)
+            if router_result is not None:
+                mode = router_result.mode
+                intent = router_result.intent
+                trace.record_classification(mode, intent)
+                trace.add_step("router", source="llm", reasoning=router_result.reasoning)
+                logger.debug(
+                    "LLM router: mode=%s intent=%s should_respond=%s priority=%s",
+                    mode, intent, router_result.should_respond, router_result.priority,
+                )
+                if not router_result.should_respond:
+                    latency_ms = int((time.monotonic() - t0) * 1000)
+                    trace.record_result("skipped", latency_ms)
+                    self._save_trace(trace)
+                    return AgentResult(
+                        mode=mode, intent=intent, reply_text="",
+                        confidence=0.0, action="skipped",
+                        latency_ms=latency_ms,
+                    )
+            else:
+                # Fallback: regex classifier when LLM router fails
+                mode = self._classifier.classify_mode(event)
+                intent = self._classifier.classify_intent(body, mode)
+                trace.record_classification(mode, intent)
+                trace.add_step("router", source="regex_fallback")
+                logger.debug("Regex fallback: mode=%s intent=%s", mode, intent)
 
             skill = self._skills_registry.match(mode, intent, body)
             if not skill:
@@ -164,6 +191,14 @@ class AgentPipeline:
             trace.skill_name = skill.name
             trace.add_step("skill_matched", skill=skill.name)
             logger.debug("Dispatching to skill: %s", skill.name)
+
+            # Pre-fetch context based on intent (parallel)
+            context_bundle = await self._context_strategy.resolve(intent, mode, event)
+            if trace:
+                trace.record_rag(context_bundle.memories, label="pre_fetched_memories")
+                if context_bundle.sender_context:
+                    trace.record_rag(context_bundle.sender_context, label="pre_fetched_sender")
+
             context = SkillContext(
                 classifier=self._classifier,
                 scorer=self._scorer,
@@ -171,6 +206,9 @@ class AgentPipeline:
                 style_examples=self._style_examples,
                 chat_history=chat_history,
                 trace=trace,
+                tool_registry=self._tools,
+                context_bundle=context_bundle,
+                router_result=router_result,
             )
             result = await skill.execute(event, self._tools, self._llm, context)
 

@@ -25,6 +25,9 @@ class SkillContext:
     style_examples: list[dict] = field(default_factory=list)
     chat_history: list[dict] | None = None
     trace: Any = None  # TraceCollector instance (optional)
+    tool_registry: Any = None  # ToolRegistry instance (optional, for prompt injection)
+    context_bundle: Any = None  # ContextBundle instance (optional, pre-fetched context)
+    router_result: Any = None  # RouterResult from LLM router (None when regex fallback used)
 
 
 class BaseSkill(ABC):

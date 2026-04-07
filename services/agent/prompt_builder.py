@@ -41,6 +41,7 @@ class PromptBuilder:
         style_examples: Optional[list[dict]] = None,
         chat_history: Optional[list[dict]] = None,
         room_messages: Optional[list[dict]] = None,
+        tool_registry=None,
     ) -> list[dict]:
         """Build messages list for LLM call.
 
@@ -63,7 +64,7 @@ class PromptBuilder:
         if mode == "outward":
             system = self._build_outward_system(memories, sender_context, style_examples, room_messages)
         else:
-            system = self._build_inward_system(memories, sender_context)
+            system = self._build_inward_system(memories, sender_context, tool_registry)
 
         user_content = self._build_user_message(event, intent, mode)
 
@@ -117,8 +118,13 @@ class PromptBuilder:
         self,
         memories: list[dict],
         sender_context: list[dict],
+        tool_registry=None,
     ) -> str:
         template = self._render_template(self._load_inward_template())
+
+        # Inject tool descriptions into {tool_descriptions} placeholder
+        tool_desc = self._format_tool_descriptions(tool_registry)
+        template = template.replace("{tool_descriptions}", tool_desc)
 
         context_block = self._format_memories(memories, label="Work context")
         sender_block = self._format_memories(sender_context, label="About the person asking")
@@ -131,6 +137,17 @@ class PromptBuilder:
             parts.append(context_block)
 
         return "\n\n".join(parts)
+
+    def _format_tool_descriptions(self, tool_registry) -> str:
+        """Format tool names and descriptions for injection into inward system prompt."""
+        if not tool_registry:
+            return ""
+        lines = []
+        for tool_def in tool_registry.list_descriptions():
+            name = tool_def.get("name", "")
+            desc = tool_def.get("description", "")
+            lines.append(f"- **{name}**: {desc}")
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # User message builder

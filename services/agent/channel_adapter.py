@@ -39,6 +39,7 @@ class CanonicalMessage:
     event_id: str = ""
     is_group: bool = False
     is_mentioned: bool = False
+    member_count: int = 0
     raw: dict = field(default_factory=dict)   # original payload for escape hatch
 
     def to_legacy_dict(self) -> dict:
@@ -60,6 +61,7 @@ class CanonicalMessage:
             "event_id": self.event_id,
             "is_group": self.is_group,
             "is_mentioned": self.is_mentioned,
+            "member_count": self.member_count,
         }
 
 

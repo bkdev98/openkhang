@@ -42,6 +42,10 @@ def mock_memory():
         {"memory": "Alice asked about the deploy last week", "score": 0.80}
     ]
     m.add_event = AsyncMock(return_value="evt-123")
+    m.search_code = AsyncMock(return_value=[])
+    m.get_room_messages = AsyncMock(return_value=[])
+    m.get_thread_messages = AsyncMock(return_value=[])
+    m.has_room_history = AsyncMock(return_value=False)
     return m
 
 
@@ -279,15 +283,16 @@ class TestMemoryUsage:
 
     @pytest.mark.asyncio
     async def test_sender_context_fetched(self, pipeline, mock_llm, mock_memory):
+        """Sender context should be fetched for non-social intents that include 'sender' strategy."""
         mock_llm.generate.return_value = make_llm_response(confidence=0.3)
-
+        # Use a non-social body so context strategy includes 'sender' fetch
         await pipeline.process_event({
             "source": "matrix",
-            "body": "hey",
+            "body": "Can you update me on the payment migration?",
             "room_id": "!room1:localhost",
             "sender_id": "alice",
         })
 
-        mock_memory.get_related.assert_called_once()
+        mock_memory.get_related.assert_called()
         call_args = mock_memory.get_related.call_args
         assert "alice" in (call_args.args or [call_args.kwargs.get("entity", "")])

@@ -179,9 +179,9 @@ All ingestors call `MemoryClient.add_memory()` after chunking.
 
 ### 3. Agent Pipeline & Skill System (`services/agent/`)
 
-**Purpose:** 4-layer agentic architecture: channels → tools → skills → responses
+**Purpose:** 7-layer agentic architecture: router → context → channels → tools → loop → skills → responses
 
-**Files (46 total, ~6500 LOC):**
+**Files (52 total, ~7200 LOC):**
 
 **Core Orchestration (7 files, ~1350 LOC):**
 - `pipeline.py` (264 LOC) — Main orchestrator; matches skills via registry, creates trace per request
@@ -192,7 +192,14 @@ All ingestors call `MemoryClient.add_memory()` after chunking.
 - `draft_queue.py` (225 LOC) — `DraftQueue`, pending → approved → sent workflow
 - `trace_collector.py` (130 LOC) — `TraceCollector`, accumulates steps (RAG, prompts, LLM, tools) for observability
 
-**Layer 1: Channel Adapters (6 files, ~569 LOC):**
+**Layer 1: Message Routing (2 files, ~200 LOC):**
+- `llm_router.py` (150 LOC) — LLM-based message router with regex fast-path
+- `prompts/router_prompt.md` (50 LOC) — Router system prompt template
+
+**Layer 2: Context Strategy (2 files, ~250 LOC):**
+- `context_strategy.py` (250 LOC) — Parallel context fetching per intent, ContextBundle dataclass
+
+**Layer 3: Channel Adapters (6 files, ~569 LOC):**
 - `channel_adapter.py` (115 LOC) — `ChannelAdapter` ABC, `CanonicalMessage` dataclass
 - `matrix_channel_adapter.py` (166 LOC) — Matrix (Google Chat) bridge adapter
 - `mention_detector.py` (79 LOC) — Mention detection: `strip_diacritics()`, `get_mention_patterns()`, `detect_mention()`
@@ -200,7 +207,7 @@ All ingestors call `MemoryClient.add_memory()` after chunking.
 - `telegram_channel_adapter.py` (25 LOC) — Telegram adapter stub
 - `response_router.py` (85 LOC) — `ResponseRouter`, dispatch by channel
 
-**Layer 2: Tool Registry & Tools (9 files, ~900 LOC):**
+**Layer 4: Tool Registry & Tools (9 files, ~900 LOC):**
 - `tool_registry.py` (85 LOC) — `BaseTool` ABC, `ToolRegistry` with execution
 - `tools/` directory (8 files, ~800 LOC total):
   * `search_knowledge_tool.py` (50 LOC) — Query semantic memory
@@ -212,7 +219,10 @@ All ingestors call `MemoryClient.add_memory()` after chunking.
   * `create_draft_tool.py` (60 LOC) — Create draft reply
   * `__init__.py` (15 LOC) — Tool re-exports
 
-**Layer 3: Skill System (5 files, ~1500 LOC):**
+**Layer 5: Unified Agent Loop (1 file, ~200 LOC):**
+- `agent_loop.py` (200 LOC) — Config-driven execution loop (outward+inward), ModeConfig dataclass
+
+**Layer 6: Skill System (5 files, ~1500 LOC):**
 - `skill_registry.py` (100 LOC) — `BaseSkill` ABC, `SkillRegistry`, deterministic matching
 - `skills/` directory (4 files, ~1400 LOC total):
   * `outward_reply_skill.py` (300 LOC) — Deterministic draft generation (safety-first)
@@ -220,7 +230,7 @@ All ingestors call `MemoryClient.add_memory()` after chunking.
   * `send_as_khanh_skill.py` (200 LOC) — Execute approved draft send action
   * `skill_helpers.py` (100 LOC) — Shared skill utilities
 
-**Layer 4: Tool-Calling Loop (1 file, ~150 LOC):**
+**Layer 7: Tool-Calling Loop (1 file, ~150 LOC):**
 - `tool_calling_loop.py` (150 LOC) — ReAct loop for Claude tool_use (inward mode only)
 
 **Prompts & Config:**
