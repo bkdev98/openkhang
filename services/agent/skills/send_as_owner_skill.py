@@ -91,22 +91,16 @@ class SendAsOwnerSkill(BaseSkill):
         if not room:
             return instruction
 
-        import asyncpg, os
-        db_url = os.getenv("OPENKHANG_DATABASE_URL", "postgresql://openkhang:openkhang@localhost:5433/openkhang")
         try:
-            conn = await asyncpg.connect(db_url)
-            try:
-                rows = await conn.fetch(
-                    "SELECT payload->>'sender' as sender, payload->>'body' as body "
-                    "FROM events WHERE source = 'chat' "
-                    "AND (metadata->>'room_id' = $1 OR payload->>'room_id' = $1) "
-                    "ORDER BY created_at DESC LIMIT 5",
-                    room["room_id"],
-                )
-            finally:
-                await conn.close()
+            room_messages = await self._memory.get_room_messages(room["room_id"], limit=5)
         except Exception:
             return instruction
+
+        # Convert room messages to the format expected below
+        rows = [
+            {"sender": m.get("sender", ""), "body": m.get("body", "")}
+            for m in reversed(room_messages)  # get_room_messages is chronological, we want newest first
+        ]
 
         if not rows:
             return f"{instruction}\n\n[Target: {room['display_name']}. No recent conversation history.]"

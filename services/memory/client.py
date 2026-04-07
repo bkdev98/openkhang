@@ -225,6 +225,10 @@ class MemoryClient:
             limit=limit,
         )
 
+    async def has_room_history(self, room_id: str) -> bool:
+        """Check if agent has ever replied in this room (single-row SQL query)."""
+        return await self._episodic.has_room_history(room_id)
+
     async def get_room_messages(
         self,
         room_id: str,

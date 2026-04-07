@@ -59,12 +59,31 @@ class InwardQuerySkill(BaseSkill):
         body = event.get("body", "").strip()
         intent = context.classifier.classify_intent(body, "inward")
 
-        # Build prompt with empty memories — LLM will search via tools
+        # Build prompt — LLM will actively search via tools before answering
+        # Pre-seed with sender context so LLM knows who's asking
+        sender_id = event.get("sender_id", "")
+        sender_context: list[dict] = []
+        if sender_id:
+            sender_context = (
+                await self._memory.get_related(sender_id, agent_id="inward")
+            )[:_SENDER_CONTEXT_LIMIT]
+
         messages = context.prompt_builder.build(
             mode="inward", intent=intent, memories=[],
-            sender_context=[], event=event,
+            sender_context=sender_context, event=event,
             style_examples=None, chat_history=context.chat_history, room_messages=None,
         )
+
+        # Instruct LLM to use tools before answering — prevents generic replies
+        messages.append({
+            "role": "user",
+            "content": (
+                "[System: You have access to search tools. ALWAYS use search_knowledge "
+                "and/or search_code before answering questions about work, projects, "
+                "code, or colleagues. Do NOT answer from general knowledge alone — "
+                "search the owner's memory first.]"
+            ),
+        })
 
         # Expose all safe inward tools (exclude routing-only tools)
         tool_defs = [

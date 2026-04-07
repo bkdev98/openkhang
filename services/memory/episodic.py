@@ -181,6 +181,22 @@ class EpisodicStore:
             for r in rows
         ]
 
+    async def has_room_history(self, room_id: str) -> bool:
+        """Check if the agent has ever sent a reply in this room. Single-row query."""
+        if self._pool is None:
+            raise RuntimeError("EpisodicStore.connect() was not called")
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchval(
+                """
+                SELECT 1 FROM events
+                WHERE source = 'agent'
+                  AND (metadata->>'room_id' = $1 OR payload->>'room_id' = $1)
+                LIMIT 1
+                """,
+                room_id,
+            )
+            return row is not None
+
     async def get_room_messages(
         self,
         room_id: str,

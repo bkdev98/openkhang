@@ -121,9 +121,12 @@ class PromptBuilder:
         template = self._render_template(self._load_inward_template())
 
         context_block = self._format_memories(memories, label="Work context")
+        sender_block = self._format_memories(sender_context, label="About the person asking")
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
         parts = [template, f"\n## Current time\n{now}"]
+        if sender_block:
+            parts.append(sender_block)
         if context_block:
             parts.append(context_block)
 

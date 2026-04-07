@@ -56,8 +56,10 @@ class OutwardReplySkill(BaseSkill):
         intent = context.classifier.classify_intent(body, "outward")
         has_deadline_risk = context.classifier.has_deadline_risk(body)
 
-        # Group chat behavioral rules
-        if self._is_group_chat(event) and not self._is_mentioned(body) and intent in (
+        # Group chat behavioral rules — use adapter-set flags from CanonicalMessage
+        is_group = event.get("is_group", False) or self._is_group_chat(event)
+        is_mentioned = event.get("is_mentioned", False) or self._is_mentioned(body)
+        if is_group and not is_mentioned and intent in (
             "social", "humor", "greeting", "fyi"
         ):
             logger.info("OutwardReplySkill: skipping group chat %s intent=%s", event.get("room_name", ""), intent)
@@ -86,16 +88,12 @@ class OutwardReplySkill(BaseSkill):
             sender_context = (await self._memory.get_related(sender_id, agent_id="outward"))[:_SENDER_CONTEXT_LIMIT]
 
         room_id = event.get("room_id", "")
-        has_history_in_room = True
+        has_history_in_room = False  # default safe: draft if unknown
         if room_id:
             try:
-                events_log = await self._memory.query_events(source="agent", limit=200)
-                has_history_in_room = any(
-                    e.get("metadata", {}).get("room_id") == room_id or e.get("payload", {}).get("room_id") == room_id
-                    for e in events_log
-                )
+                has_history_in_room = await self._memory.has_room_history(room_id)
             except Exception:
-                pass  # fail-open
+                pass  # fail-safe: defaults to False → draft
 
         room_messages: list[dict] = []
         if room_id:
@@ -133,7 +131,7 @@ class OutwardReplySkill(BaseSkill):
                     confidence=confidence, action="auto_sent", matrix_event_id=eid,
                     latency_ms=latency_ms, tokens_used=llm_response.tokens_used,
                 )
-            except RuntimeError as exc:
+            except Exception as exc:
                 logger.warning("OutwardReplySkill: auto-send failed (%s), falling back to draft", exc)
 
         draft_id = await self._drafts.add_draft(
