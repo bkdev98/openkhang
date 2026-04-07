@@ -3,93 +3,101 @@
     <!-- Page header -->
     <h1 class="font-mono font-semibold text-lg text-ok-text">Memory</h1>
 
-    <!-- Search bar -->
-    <div class="relative">
-        <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-ok-ghost"></i>
-        <input type="text" id="memory-search" name="q" placeholder="Search memories & knowledge..."
-               hx-get="/api/memory/search"
-               hx-trigger="keyup changed delay:300ms"
-               hx-target="#memory-results"
-               hx-swap="innerHTML"
-               hx-include="[name='type']"
-               hx-indicator="#memory-spinner"
-               class="w-full bg-ok-srf border border-ok-border rounded-lg pl-10 pr-4 py-2.5 text-sm text-ok-text
-                      placeholder-ok-ghost focus:outline-none focus:border-ok-amber font-mono">
-        <span id="memory-spinner" class="htmx-indicator absolute right-3 top-1/2 -translate-y-1/2 text-xs text-ok-amber">searching...</span>
-        <input type="hidden" name="type" value="" id="memory-type-input">
-    </div>
+    <!-- Two-column layout: Search/Results | Knowledge Drop -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-    <!-- Type filter pills -->
-    <div class="flex items-center gap-2">
-        <button class="filter-pill active" data-type=""
-                onclick="filterMemoryType(this, '')">All</button>
-        <button class="filter-pill" data-type="semantic"
-                onclick="filterMemoryType(this, 'semantic')">
-            <span class="w-2 h-2 rounded-full bg-ok-cyan inline-block"></span> Semantic
-        </button>
-        <button class="filter-pill" data-type="episodic"
-                onclick="filterMemoryType(this, 'episodic')">
-            <span class="w-2 h-2 rounded-full bg-ok-purple inline-block"></span> Episodic
-        </button>
-        <button class="filter-pill" data-type="working"
-                onclick="filterMemoryType(this, 'working')">
-            <span class="w-2 h-2 rounded-full bg-ok-amber inline-block"></span> Working
-        </button>
-    </div>
+        <!-- LEFT: Search + Results (2/3 width) -->
+        <div class="lg:col-span-2 flex flex-col gap-4">
 
-    <!-- Results -->
-    <div id="memory-results" class="flex flex-col gap-2">
-        <p class="text-ok-ghost text-xs text-center py-8">Search for memories or browse by type</p>
-    </div>
-
-    <!-- Knowledge Drop -->
-    <div class="mt-4 border-t border-ok-border pt-4">
-        <h2 class="font-mono text-sm font-medium text-ok-text mb-3">Knowledge Drop</h2>
-        <form hx-post="/api/memory/ingest"
-              hx-target="#ingest-result"
-              hx-swap="innerHTML"
-              hx-encoding="multipart/form-data"
-              class="flex flex-col gap-3">
-            <textarea name="text" rows="4" placeholder="Paste text to ingest as knowledge..."
-                      class="bg-ok-srf border border-ok-border rounded-lg px-4 py-3 text-sm text-ok-text
-                             placeholder-ok-ghost focus:outline-none focus:border-ok-amber resize-none"></textarea>
-
-            <!-- File drop zone -->
-            <div id="drop-zone"
-                 class="border-2 border-dashed border-ok-border rounded-lg p-6 text-center cursor-pointer
-                        hover:border-ok-amber transition-colors"
-                 onclick="document.getElementById('file-input').click()">
-                <i data-lucide="upload" class="w-6 h-6 mx-auto text-ok-ghost mb-2"></i>
-                <p class="text-xs text-ok-ghost">Drop a file or click to upload</p>
-                <p class="text-[10px] text-ok-ghost mt-1">text, markdown — max 5MB</p>
-                <p id="file-name" class="text-xs text-ok-amber mt-2 hidden"></p>
-                <input type="file" id="file-input" name="file" accept=".txt,.md"
-                       class="hidden" onchange="showFileName(this)">
+            <!-- Search bar -->
+            <div class="relative">
+                <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-ok-ghost"></i>
+                <input type="text" id="memory-search" name="q" placeholder="Search memories & knowledge..."
+                       hx-get="/api/memory/search"
+                       hx-trigger="keyup changed delay:300ms, load"
+                       hx-target="#memory-results"
+                       hx-swap="innerHTML"
+                       hx-include="[name='type']"
+                       hx-indicator="#memory-spinner"
+                       class="w-full bg-ok-srf border border-ok-border rounded-lg pl-10 pr-4 py-2.5 text-sm text-ok-text
+                              placeholder-ok-ghost focus:outline-none focus:border-ok-amber font-mono">
+                <span id="memory-spinner" class="htmx-indicator absolute right-3 top-1/2 -translate-y-1/2 text-xs text-ok-amber">searching...</span>
+                <input type="hidden" name="type" value="" id="memory-type-input">
             </div>
 
-            <div class="flex items-center gap-3">
-                <input type="text" name="source_label" placeholder="Source label (optional)"
-                       class="flex-1 bg-ok-srf border border-ok-border rounded-lg px-4 py-2.5 text-sm text-ok-text
-                              placeholder-ok-ghost focus:outline-none focus:border-ok-amber">
-                <button type="submit"
-                        class="bg-ok-amber hover:bg-ok-ambdim text-ok-void text-sm font-medium px-6 py-2.5
-                               rounded-lg transition-colors">
-                    Ingest
+            <!-- Type filter pills -->
+            <div class="flex items-center gap-2">
+                <button class="filter-pill active" data-type=""
+                        onclick="filterMemoryType(this, '')">All</button>
+                <button class="filter-pill" data-type="semantic"
+                        onclick="filterMemoryType(this, 'semantic')">
+                    <span class="w-2 h-2 rounded-full bg-ok-cyan inline-block"></span> Semantic
+                </button>
+                <button class="filter-pill" data-type="episodic"
+                        onclick="filterMemoryType(this, 'episodic')">
+                    <span class="w-2 h-2 rounded-full bg-ok-purple inline-block"></span> Episodic
+                </button>
+                <button class="filter-pill" data-type="working"
+                        onclick="filterMemoryType(this, 'working')">
+                    <span class="w-2 h-2 rounded-full bg-ok-amber inline-block"></span> Working
                 </button>
             </div>
-            <div id="ingest-result"></div>
-        </form>
+
+            <!-- Results -->
+            <div id="memory-results" class="flex flex-col gap-2 max-h-[600px] overflow-y-auto feed-scroll">
+                <div class="skeleton h-16 rounded-lg"></div>
+                <div class="skeleton h-16 rounded-lg"></div>
+                <div class="skeleton h-16 rounded-lg"></div>
+            </div>
+        </div>
+
+        <!-- RIGHT: Knowledge Drop (1/3 width) -->
+        <div class="flex flex-col gap-3">
+            <h2 class="font-mono text-sm font-medium text-ok-text">Knowledge Drop</h2>
+            <form hx-post="/api/memory/ingest"
+                  hx-target="#ingest-result"
+                  hx-swap="innerHTML"
+                  hx-encoding="multipart/form-data"
+                  class="flex flex-col gap-3">
+                <textarea name="text" rows="6" placeholder="Paste text to ingest..."
+                          class="bg-ok-srf border border-ok-border rounded-lg px-4 py-3 text-sm text-ok-text
+                                 placeholder-ok-ghost focus:outline-none focus:border-ok-amber resize-none"></textarea>
+
+                <!-- File drop zone -->
+                <div id="drop-zone"
+                     class="border-2 border-dashed border-ok-border rounded-lg p-4 text-center cursor-pointer
+                            hover:border-ok-amber transition-colors"
+                     onclick="document.getElementById('file-input').click()">
+                    <i data-lucide="upload" class="w-5 h-5 mx-auto text-ok-ghost mb-1"></i>
+                    <p class="text-[11px] text-ok-ghost">Drop file or click</p>
+                    <p class="text-[10px] text-ok-ghost mt-0.5">text, markdown — max 5MB</p>
+                    <p id="file-name" class="text-[11px] text-ok-amber mt-1 hidden"></p>
+                    <input type="file" id="file-input" name="file" accept=".txt,.md"
+                           class="hidden" onchange="showFileName(this)">
+                </div>
+
+                <input type="text" name="source_label" placeholder="Source label (optional)"
+                       class="bg-ok-srf border border-ok-border rounded-lg px-4 py-2 text-sm text-ok-text
+                              placeholder-ok-ghost focus:outline-none focus:border-ok-amber">
+                <button type="submit"
+                        class="bg-ok-amber hover:bg-ok-ambdim text-ok-void text-sm font-medium px-4 py-2.5
+                               rounded-lg transition-colors w-full">
+                    Ingest
+                </button>
+                <div id="ingest-result"></div>
+            </form>
+        </div>
+
     </div>
 </div>
 
 <script>
 function filterMemoryType(btn, type) {
-    document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.filter-pill').forEach(function(p) { p.classList.remove('active'); });
     btn.classList.add('active');
     document.getElementById('memory-type-input').value = type;
-    // Trigger search if there's a query
     var input = document.getElementById('memory-search');
-    if (input.value) htmx.trigger(input, 'keyup');
+    if (input) htmx.trigger(input, 'keyup');
 }
 
 function showFileName(input) {
@@ -100,15 +108,14 @@ function showFileName(input) {
     }
 }
 
-// Drag and drop
 var dz = document.getElementById('drop-zone');
 if (dz) {
-    ['dragenter','dragover'].forEach(e => dz.addEventListener(e, function(ev) {
+    ['dragenter','dragover'].forEach(function(e) { dz.addEventListener(e, function(ev) {
         ev.preventDefault(); dz.classList.add('drag-over');
-    }));
-    ['dragleave','drop'].forEach(e => dz.addEventListener(e, function(ev) {
+    }); });
+    ['dragleave','drop'].forEach(function(e) { dz.addEventListener(e, function(ev) {
         ev.preventDefault(); dz.classList.remove('drag-over');
-    }));
+    }); });
     dz.addEventListener('drop', function(ev) {
         var fi = document.getElementById('file-input');
         fi.files = ev.dataTransfer.files;

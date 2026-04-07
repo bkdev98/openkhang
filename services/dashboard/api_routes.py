@@ -365,7 +365,7 @@ async def chat_clear(request: Request):
 @router.get("/memory/search", response_class=HTMLResponse)
 async def memory_search(request: Request, q: str = "", type: str = ""):
     if not q and not type:
-        return HTMLResponse('<p class="text-ok-ghost text-xs text-center py-8">Enter a search query</p>')
+        q = "recent"  # Default: show latest memories
     try:
         results = await _get_svc().search_memories(query=q or "recent", limit=20)
         if not results:
