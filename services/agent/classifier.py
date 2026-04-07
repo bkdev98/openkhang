@@ -41,8 +41,9 @@ FYI_PATTERNS = re.compile(
 )
 
 # Intent: social patterns (greetings, thanks, emoji-only, casual chitchat)
+# Allows common typos: helo, heloo, helloo, hii, hihi, heyy, etc.
 SOCIAL_PATTERNS = re.compile(
-    r"^(hi|hello|hey|good morning|good afternoon|chào|xin chào|thanks|thank you|cảm ơn|👋|😊|ok|okay|oke|noted|got it|sure|np|no problem|ack|received)[\s!.]*$",
+    r"^(h[ei]+l*o+|h[ei]+y*|(?:hi){1,3}|h[ei]+|good\s*(morning|afternoon|evening)|chào|xin\s*chào|thanks|thank\s*you|cảm\s*ơn|👋|😊|🙏|ok|okay|oke|okie|noted|got\s*it|sure|np|no\s*problem|ack|received|yo+|sup|hola|ahoy|hru|wassup|wazzup)[\s!.\?\~]*$",
     re.IGNORECASE,
 )
 

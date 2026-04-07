@@ -72,8 +72,10 @@ class OutwardReplySkill(BaseSkill):
         trace = context.trace
 
         # RAG + conditional code search — skip for social/greeting (no context needed)
+        # Also skip for very short fyi messages (1-2 words) — nothing meaningful to search
         memories: list[dict] = []
-        if intent not in ("social", "greeting"):
+        skip_rag = intent in ("social", "greeting") or (intent == "fyi" and len(body.split()) <= 2)
+        if not skip_rag:
             memories = await self._memory.search(body, agent_id="outward", limit=_RAG_LIMIT)
             body_lower = body.lower()
             if intent in ("question", "request") or any(kw in body_lower for kw in _CODE_KEYWORDS):
