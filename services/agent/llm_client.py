@@ -190,6 +190,10 @@ class LLMClient:
             latency_ms = int((time.monotonic() - t0) * 1000)
             raw_text = data["choices"][0]["message"]["content"]
             tokens_used = data.get("usage", {}).get("total_tokens", 0)
+            # Meridian proxy may not report usage — estimate from content length
+            if not tokens_used:
+                prompt_chars = sum(len(m.get("content", "")) for m in convo_messages)
+                tokens_used = (prompt_chars + len(raw_text)) // 4  # ~4 chars/token estimate
 
         except httpx.ConnectError as exc:
             raise RuntimeError(
@@ -281,6 +285,11 @@ class LLMClient:
             ) from exc
 
         tokens_used = data.get("usage", {}).get("total_tokens", 0)
+        # Meridian proxy may not report usage — estimate from content length
+        if not tokens_used:
+            prompt_chars = sum(len(str(m.get("content", ""))) for m in convo_messages)
+            resp_chars = len(str(data["choices"][0]["message"].get("content", "")))
+            tokens_used = (prompt_chars + resp_chars) // 4
         choice_message = data["choices"][0]["message"]
         text = choice_message.get("content") or ""
         raw_tool_calls = choice_message.get("tool_calls") or []

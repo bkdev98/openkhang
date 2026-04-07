@@ -150,6 +150,8 @@ class PromptBuilder:
             # If still a raw number, use room_name as fallback (for DMs, room_name = person's name)
             if sender_display.isdigit() and room_name:
                 sender_display = room_name
+            elif sender_display.isdigit():
+                sender_display = "colleague"
 
         if mode == "outward":
             header = f"[Message from {sender_display}"

@@ -71,18 +71,20 @@ class OutwardReplySkill(BaseSkill):
 
         trace = context.trace
 
-        # RAG + conditional code search
-        memories = await self._memory.search(body, agent_id="outward", limit=_RAG_LIMIT)
-        body_lower = body.lower()
-        if intent in ("question", "request") or any(kw in body_lower for kw in _CODE_KEYWORDS):
-            seen_ids = {m.get("id") for m in memories}
-            for cm in await self._memory.search(body, agent_id="inward", limit=5):
-                if cm.get("id") not in seen_ids:
-                    memories.append(cm)
-            for cr in await self._memory.search_code(extract_code_search_terms(body), limit=20):
-                meta = cr.get("metadata", {})
-                score = 0.8 if meta.get("doc_type") in ("business-logic", "api-spec") else 0.5
-                memories.append({"memory": cr["payload"].get("text", "")[:500], "score": score, "metadata": meta})
+        # RAG + conditional code search — skip for social/greeting (no context needed)
+        memories: list[dict] = []
+        if intent not in ("social", "greeting"):
+            memories = await self._memory.search(body, agent_id="outward", limit=_RAG_LIMIT)
+            body_lower = body.lower()
+            if intent in ("question", "request") or any(kw in body_lower for kw in _CODE_KEYWORDS):
+                seen_ids = {m.get("id") for m in memories}
+                for cm in await self._memory.search(body, agent_id="inward", limit=5):
+                    if cm.get("id") not in seen_ids:
+                        memories.append(cm)
+                for cr in await self._memory.search_code(extract_code_search_terms(body), limit=20):
+                    meta = cr.get("metadata", {})
+                    score = 0.8 if meta.get("doc_type") in ("business-logic", "api-spec") else 0.5
+                    memories.append({"memory": cr["payload"].get("text", "")[:500], "score": score, "metadata": meta})
         if trace:
             trace.record_rag(memories, label="rag_memories")
 
