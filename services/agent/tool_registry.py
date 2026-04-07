@@ -71,14 +71,14 @@ class ToolRegistry:
         """Return Claude tool_use compatible definitions for all tools."""
         return [t.to_claude_tool() for t in self._tools.values()]
 
-    async def execute(self, name: str, **kwargs) -> ToolResult:
+    async def execute(self, tool_name: str, **kwargs) -> ToolResult:
         """Execute a tool by name. Returns ToolResult (never raises)."""
-        tool = self._tools.get(name)
+        tool = self._tools.get(tool_name)
         if not tool:
-            return ToolResult(success=False, error=f"Tool '{name}' not found")
+            return ToolResult(success=False, error=f"Tool '{tool_name}' not found")
         try:
             data = await tool.execute(**kwargs)
             return ToolResult(success=True, data=data)
         except Exception as exc:
-            logger.error("Tool '%s' failed: %s", name, exc)
+            logger.error("Tool '%s' failed: %s", tool_name, exc)
             return ToolResult(success=False, error=str(exc))
