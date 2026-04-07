@@ -12,6 +12,10 @@ from .manage_draft_tool import ManageDraftTool
 from .search_events_tool import SearchEventsTool
 from .search_jira_tool import SearchJiraTool
 from .search_gitlab_tool import SearchGitLabTool
+from .web_fetch_tool import WebFetchTool
+from .web_search_tool import WebSearchTool
+from .memory_note_tool import MemoryNoteTool
+from .shell_exec_tool import ShellExecTool
 
 __all__ = [
     "SearchKnowledgeTool",
@@ -27,4 +31,8 @@ __all__ = [
     "SearchEventsTool",
     "SearchJiraTool",
     "SearchGitLabTool",
+    "WebFetchTool",
+    "WebSearchTool",
+    "MemoryNoteTool",
+    "ShellExecTool",
 ]

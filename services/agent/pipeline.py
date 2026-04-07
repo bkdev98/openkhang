@@ -266,6 +266,10 @@ class AgentPipeline:
             SearchEventsTool,
             SearchJiraTool,
             SearchGitLabTool,
+            WebFetchTool,
+            WebSearchTool,
+            MemoryNoteTool,
+            ShellExecTool,
         )
         registry = ToolRegistry()
         registry.register(SearchKnowledgeTool(self._memory))
@@ -281,6 +285,10 @@ class AgentPipeline:
         registry.register(SearchEventsTool(self._drafts))
         registry.register(SearchJiraTool())
         registry.register(SearchGitLabTool())
+        registry.register(WebFetchTool())
+        registry.register(WebSearchTool())
+        registry.register(MemoryNoteTool(self._memory))
+        registry.register(ShellExecTool())
         return registry
 
     def _init_skills(self) -> SkillRegistry:
