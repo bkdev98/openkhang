@@ -269,7 +269,7 @@ async def _process_event(
                 "room_name": event.get("room_name", ""),
                 "sender": event.get("sender", ""),
                 "body": event.get("body", "")[:200],
-                "reply_text": result.reply_text[:500] if result.reply_text else "",
+                "reply_text": result.reply_text[:3000] if result.reply_text else "",
                 "draft_id": result.draft_id or "",
                 "confidence": result.confidence,
             })

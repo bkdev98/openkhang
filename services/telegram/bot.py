@@ -85,12 +85,15 @@ async def send_draft_notification(data: dict) -> None:
         return
     room = _friendly_name(data.get("room_name", ""))
     sender = _friendly_name(data.get("sender", ""))
-    body = data.get("body", "")[:150]
-    reply = data.get("reply_text", "")[:300]
+    # For DMs: sender bridge ID is numeric → _friendly_name returns "". Use room_name as fallback.
+    if not sender and room:
+        sender = room
+    body = data.get("body", "")[:200]
+    reply = data.get("reply_text", "")[:3000]  # show full draft (Telegram handles splitting)
     draft_id = data.get("draft_id", "")
     conf = data.get("confidence", 0)
 
-    # For DMs: room is often empty, use sender as context; skip redundant Room line
+    # Skip redundant Room line when room == sender (DMs)
     header = f"<b>Draft reply</b> ({conf:.0%} confidence)\n"
     if room and room != sender:
         header += f"<b>Room:</b> {_esc(room)}\n"
@@ -102,6 +105,16 @@ async def send_draft_notification(data: dict) -> None:
         f"<b>Draft:</b>\n{_esc(reply)}"
     )
     kb = _draft_keyboard(draft_id) if draft_id else None
+    # Telegram limit: 4096 chars. If too long, truncate draft and add note.
+    if len(text) > 4000:
+        # Recalculate with shorter reply to fit within limit
+        available = 4000 - len(header) - len(f"<b>Message:</b> {_esc(body)}\n\n<b>Draft:</b>\n")
+        reply_trunc = reply[:max(available - 30, 200)]
+        text = (
+            f"{header}"
+            f"<b>Message:</b> {_esc(body)}\n\n"
+            f"<b>Draft:</b>\n{_esc(reply_trunc)}…\n\n<i>(truncated — full text sent on approve)</i>"
+        )
     await bot.send_message(chat_id=int(CHAT_ID), text=text, reply_markup=kb)
 
 
@@ -111,11 +124,13 @@ async def send_auto_reply_notification(data: dict) -> None:
         return
     room = _friendly_name(data.get("room_name", ""))
     sender = _friendly_name(data.get("sender", ""))
+    if not sender and room:
+        sender = room
     body = data.get("body", "")[:200]
     reply = data.get("reply_text", "")[:300]
     conf = data.get("confidence", 0)
 
-    context = f"in {_esc(room)}" if room else f"to {_esc(sender)}"
+    context = f"in {_esc(room)}" if room and room != sender else f"to {_esc(sender)}"
     text = (
         f"<b>Auto-replied</b> ({conf:.0%}) {context}\n"
         f"<b>From:</b> {_esc(sender or 'unknown')}\n"
@@ -382,7 +397,11 @@ async def _resolve_draft_id(prefix: str) -> Any:
 
 
 async def _send_approved_to_matrix(room_id: str, text: str) -> bool:
-    """Send an approved draft message to Matrix via Synapse API."""
+    """Send an approved draft message to Matrix via Synapse API.
+
+    Splits long messages into chunks to stay within Google Chat's ~4096 char limit.
+    Splits at paragraph boundaries when possible.
+    """
     import asyncio
     import urllib.parse
     import urllib.request
@@ -394,25 +413,54 @@ async def _send_approved_to_matrix(room_id: str, text: str) -> bool:
         logger.warning("_send_approved_to_matrix: missing token or room_id")
         return False
 
-    txn_id = str(_uuid.uuid4())
+    # Split into chunks if text exceeds limit (Google Chat bridge limit ~4096)
+    max_chunk = 3800
+    chunks = _split_text(text, max_chunk) if len(text) > max_chunk else [text]
+
+    loop = asyncio.get_running_loop()
     enc_room = urllib.parse.quote(room_id)
-    url = f"{hs}/_matrix/client/v3/rooms/{enc_room}/send/m.room.message/{txn_id}"
-    body = json.dumps({"msgtype": "m.text", "body": text}).encode()
+    all_ok = True
 
-    req = urllib.request.Request(url, data=body, method="PUT")
-    req.add_header("Authorization", f"Bearer {token}")
-    req.add_header("Content-Type", "application/json")
+    for chunk in chunks:
+        txn_id = str(_uuid.uuid4())
+        url = f"{hs}/_matrix/client/v3/rooms/{enc_room}/send/m.room.message/{txn_id}"
+        body = json.dumps({"msgtype": "m.text", "body": chunk}).encode()
 
-    try:
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None, lambda: urllib.request.urlopen(req, timeout=10)
-        )
-        logger.info("Approved draft sent to %s: %s", room_id, text[:60])
-        return True
-    except Exception as exc:
-        logger.error("Matrix send failed for %s: %s", room_id, exc)
-        return False
+        req = urllib.request.Request(url, data=body, method="PUT")
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Content-Type", "application/json")
+
+        try:
+            await loop.run_in_executor(
+                None, lambda r=req: urllib.request.urlopen(r, timeout=10)
+            )
+        except Exception as exc:
+            logger.error("Matrix send failed for %s: %s", room_id, exc)
+            all_ok = False
+
+    if all_ok:
+        logger.info("Approved draft sent to %s (%d chunks): %s", room_id, len(chunks), text[:60])
+    return all_ok
+
+
+def _split_text(text: str, max_len: int) -> list[str]:
+    """Split text into chunks, preferring paragraph then line boundaries."""
+    chunks = []
+    while text:
+        if len(text) <= max_len:
+            chunks.append(text)
+            break
+        # Try to split at paragraph boundary
+        cut = text.rfind("\n\n", 0, max_len)
+        if cut < max_len // 2:
+            # Try line boundary
+            cut = text.rfind("\n", 0, max_len)
+        if cut < max_len // 4:
+            # Hard cut
+            cut = max_len
+        chunks.append(text[:cut].rstrip())
+        text = text[cut:].lstrip("\n")
+    return chunks
 
 
 async def _send_long_text(thinking_msg: Message, text: str, max_len: int = 4000) -> None:

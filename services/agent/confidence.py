@@ -130,14 +130,26 @@ class ConfidenceScorer:
         return float(self._config.get("default_threshold", 0.85))
 
     def _is_group_chat(self, event: dict) -> bool:
-        """Heuristic: group chats have room_name set and it's not a DM pattern."""
+        """Heuristic: detect group chats by room name patterns.
+
+        Group rooms typically have descriptive names with keywords like 'team',
+        hyphens, or organizational patterns. DM rooms have person names (no such keywords).
+        Since DM room names are now resolved from member display names, we can't
+        simply check if room_name exists — must look for group-specific indicators.
+        """
         room_name = event.get("room_name", "")
-        # Group chats typically have named rooms; DMs are often unnamed or 1:1
         if not room_name:
             return False
-        # DM rooms in Matrix are usually unnamed or have the other person's name
-        # Group rooms usually have descriptive names with multiple words
-        return bool(room_name and len(room_name) > 3)
+        rn_lower = room_name.lower()
+        # Group indicators: organizational keywords, hyphens (project-name), brackets
+        group_keywords = ("team", "group", "channel", "chat", "dev", "squad", "all", "general")
+        if any(kw in rn_lower for kw in group_keywords):
+            return True
+        # Rooms with " - " separator are often org-structured groups (e.g., "ITC - App Dev")
+        # but person names like "NGUYỄN VĂN A" don't use " - "
+        if " - " in room_name:
+            return True
+        return False
 
     def _is_cautious_sender(self, event: dict) -> bool:
         """Check if sender title (from room display) contains manager/lead keywords."""

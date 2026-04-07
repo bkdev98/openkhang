@@ -30,7 +30,11 @@ _owner_mention_patterns: list[str] | None = None
 
 
 def _get_mention_patterns() -> list[str]:
-    """Build mention regex patterns from persona.yaml name. Cached after first call."""
+    """Build mention regex patterns from persona.yaml name. Cached after first call.
+
+    Only matches explicit @-mentions and Matrix-to links, NOT bare name words.
+    Bare words like 'khanh' appear too often in Vietnamese text and cause false positives.
+    """
     global _owner_mention_patterns
     if _owner_mention_patterns is not None:
         return _owner_mention_patterns
@@ -44,11 +48,14 @@ def _get_mention_patterns() -> list[str]:
         name = persona.get("name", "")
         if name:
             parts = name.lower().split()
+            # Only match @-prefixed mentions (e.g., @khanh, @bui)
             for part in parts:
-                patterns.append(rf"@{part}")
-                patterns.append(rf"\b{part}\b")
+                patterns.append(rf"@{part}\b")
+            # Full name as @-mention (e.g., @khanh bui)
             if len(parts) > 1:
-                patterns.append(rf"\b{' '.join(parts)}\b")
+                patterns.append(rf"@{' '.join(parts)}")
+            # Matrix-to link format used by Google Chat bridge for @-mentions
+            patterns.append(r"matrix\.to/#/@googlechat_")
     except Exception:
         pass  # fail-open: no persona = no owner-specific mention patterns
     _owner_mention_patterns = patterns
@@ -100,7 +107,9 @@ class MatrixChannelAdapter(ChannelAdapter):
         event_id = str(row.get("id", ""))
 
         is_group = _detect_group_chat(room_name)
-        is_mentioned = _detect_mention(body)
+        # Check both plain body and formatted_body (which contains matrix.to mention links)
+        formatted_body = payload.get("formatted_body", "")
+        is_mentioned = _detect_mention(body, formatted_body)
 
         return CanonicalMessage(
             body=body,
@@ -189,7 +198,10 @@ def _detect_group_chat(room_name: str) -> bool:
     return bool(room_name)
 
 
-def _detect_mention(body: str) -> bool:
-    """Check if a message body @mentions the owner by name or handle."""
-    text = body.lower()
+def _detect_mention(body: str, formatted_body: str = "") -> bool:
+    """Check if a message @mentions the owner via explicit @-prefix or matrix.to link.
+
+    Only matches explicit @-mentions, NOT bare name words in text.
+    """
+    text = (body + " " + formatted_body).lower()
     return any(re.search(p, text) for p in _get_mention_patterns())
