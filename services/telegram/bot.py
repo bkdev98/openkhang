@@ -83,17 +83,21 @@ async def send_draft_notification(data: dict) -> None:
     """Push draft notification with inline keyboard."""
     if not bot or not CHAT_ID:
         return
-    room = data.get("room_name", "unknown")
-    sender = data.get("sender", "?")
+    room = _friendly_name(data.get("room_name", ""))
+    sender = _friendly_name(data.get("sender", ""))
     body = data.get("body", "")[:150]
     reply = data.get("reply_text", "")[:300]
     draft_id = data.get("draft_id", "")
     conf = data.get("confidence", 0)
 
+    # For DMs: room is often empty, use sender as context; skip redundant Room line
+    header = f"<b>Draft reply</b> ({conf:.0%} confidence)\n"
+    if room and room != sender:
+        header += f"<b>Room:</b> {_esc(room)}\n"
+    header += f"<b>From:</b> {_esc(sender or 'unknown')}\n"
+
     text = (
-        f"<b>Draft reply</b> ({conf:.0%} confidence)\n"
-        f"<b>Room:</b> {_esc(room)}\n"
-        f"<b>From:</b> {_esc(sender)}\n"
+        f"{header}"
         f"<b>Message:</b> {_esc(body)}\n\n"
         f"<b>Draft:</b>\n{_esc(reply)}"
     )
@@ -105,15 +109,16 @@ async def send_auto_reply_notification(data: dict) -> None:
     """Push notification when agent auto-replied, with conversation context."""
     if not bot or not CHAT_ID:
         return
-    room = data.get("room_name", "unknown")
-    sender = data.get("sender", "?")
+    room = _friendly_name(data.get("room_name", ""))
+    sender = _friendly_name(data.get("sender", ""))
     body = data.get("body", "")[:200]
     reply = data.get("reply_text", "")[:300]
     conf = data.get("confidence", 0)
 
+    context = f"in {_esc(room)}" if room else f"to {_esc(sender)}"
     text = (
-        f"<b>Auto-replied</b> ({conf:.0%}) in {_esc(room)}\n"
-        f"<b>From:</b> {_esc(sender)}\n"
+        f"<b>Auto-replied</b> ({conf:.0%}) {context}\n"
+        f"<b>From:</b> {_esc(sender or 'unknown')}\n"
         f"<b>Message:</b> {_esc(body)}\n\n"
         f"<b>Reply sent:</b>\n{_esc(reply)}"
     )
@@ -271,7 +276,7 @@ async def cmd_drafts(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("approve:"))
 async def cb_approve(callback: CallbackQuery) -> None:
-    """Approve a draft via inline button."""
+    """Approve a draft via inline button and send the message to Matrix."""
     if not _authorized(callback):
         return
     draft_prefix = callback.data.split(":")[1]
@@ -280,15 +285,29 @@ async def cb_approve(callback: CallbackQuery) -> None:
         await callback.answer("Draft not found", show_alert=True)
         return
 
-    await _pool.execute(
-        "UPDATE draft_replies SET status = 'approved' WHERE id = $1",
+    # Fetch draft details before transitioning status
+    row = await _pool.fetchrow(
+        "SELECT room_id, draft_text FROM draft_replies WHERE id = $1 AND status = 'pending'",
         draft_id,
     )
+    if not row:
+        await callback.answer("Draft already processed", show_alert=True)
+        return
+
+    await _pool.execute(
+        "UPDATE draft_replies SET status = 'approved', reviewed_at = NOW(), reviewer_action = 'approve' WHERE id = $1",
+        draft_id,
+    )
+
+    # Actually send the approved message to Matrix
+    sent = await _send_approved_to_matrix(row["room_id"], row["draft_text"])
+    status_label = "APPROVED & SENT" if sent else "APPROVED (send failed)"
+
     await callback.message.edit_text(
-        callback.message.text + "\n\n<b>APPROVED</b>",
+        callback.message.text + f"\n\n<b>{status_label}</b>",
         reply_markup=None,
     )
-    await callback.answer("Approved")
+    await callback.answer("Approved" if sent else "Approved but send failed")
 
 
 @router.callback_query(F.data.startswith("reject:"))
@@ -362,6 +381,40 @@ async def _resolve_draft_id(prefix: str) -> Any:
     return row["id"] if row else None
 
 
+async def _send_approved_to_matrix(room_id: str, text: str) -> bool:
+    """Send an approved draft message to Matrix via Synapse API."""
+    import asyncio
+    import urllib.parse
+    import urllib.request
+    import uuid as _uuid
+
+    hs = os.getenv("MATRIX_HOMESERVER", "http://localhost:8008")
+    token = os.getenv("MATRIX_ACCESS_TOKEN", "")
+    if not token or not room_id:
+        logger.warning("_send_approved_to_matrix: missing token or room_id")
+        return False
+
+    txn_id = str(_uuid.uuid4())
+    enc_room = urllib.parse.quote(room_id)
+    url = f"{hs}/_matrix/client/v3/rooms/{enc_room}/send/m.room.message/{txn_id}"
+    body = json.dumps({"msgtype": "m.text", "body": text}).encode()
+
+    req = urllib.request.Request(url, data=body, method="PUT")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Content-Type", "application/json")
+
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None, lambda: urllib.request.urlopen(req, timeout=10)
+        )
+        logger.info("Approved draft sent to %s: %s", room_id, text[:60])
+        return True
+    except Exception as exc:
+        logger.error("Matrix send failed for %s: %s", room_id, exc)
+        return False
+
+
 async def _send_long_text(thinking_msg: Message, text: str, max_len: int = 4000) -> None:
     """Send long text, handling parse errors and splitting if needed."""
     # Try with default parse mode first, fall back to no parsing
@@ -387,6 +440,27 @@ async def _send_long_text(thinking_msg: Message, text: str, max_len: int = 4000)
             await thinking_msg.answer(chunk)
         except Exception:
             await thinking_msg.answer(chunk, parse_mode=None)
+
+
+def _friendly_name(raw: str) -> str:
+    """Convert raw Matrix bridge IDs to readable names.
+
+    @googlechat_12345:localhost → '' (numeric, no useful name)
+    @googlechat_name:localhost → 'name'
+    Empty or missing → ''
+    """
+    if not raw:
+        return ""
+    # Strip Matrix bridge prefix
+    name = raw
+    if name.startswith("@googlechat_"):
+        name = name.split(":")[0].replace("@googlechat_", "")
+    elif name.startswith("@"):
+        name = name.split(":")[0].lstrip("@")
+    # Pure numeric IDs are not useful display names
+    if name.isdigit():
+        return ""
+    return name
 
 
 def _esc(text: str) -> str:

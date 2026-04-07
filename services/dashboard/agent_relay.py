@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import time as _time
 from datetime import datetime, timezone
 
 import asyncpg
@@ -20,9 +21,12 @@ logger = logging.getLogger(__name__)
 
 # Track last processed event to avoid re-processing
 _last_processed: datetime | None = None
+# Dedup: track recently processed event IDs to prevent duplicate pipeline runs
+_processed_event_ids: set[str] = set()
+_MAX_PROCESSED_IDS = 500  # bounded to prevent unbounded memory growth
 
 # Auto-reply toggle — when False, pipeline still runs but all replies go to draft (never auto-sends)
-_autoreply_enabled: bool = True
+_autoreply_enabled: bool = False
 
 
 def is_autoreply_enabled() -> bool:
@@ -115,9 +119,15 @@ async def run_agent_relay(pool: asyncpg.Pool) -> None:
     # Start from now — don't reprocess historical events
     _last_processed = datetime.now(timezone.utc)
 
+    # Debounce buffer: (sender, room_id) → list of (row, payload, metadata)
+    # Holds messages for a short window to batch rapid-fire messages from same sender
+    _debounce_buffer: dict[tuple[str, str], list[tuple[dict, dict, dict]]] = {}
+    _debounce_deadline: dict[tuple[str, str], float] = {}
+    _DEBOUNCE_SECONDS = 5.0  # wait this long after last message before processing
+
     try:
         while True:
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
 
             try:
                 rows = await pool.fetch(
@@ -126,15 +136,25 @@ async def run_agent_relay(pool: asyncpg.Pool) -> None:
                     FROM events
                     WHERE source = 'chat'
                       AND event_type = 'message.received'
-                      AND created_at > $1
+                      AND created_at >= $1
                     ORDER BY created_at ASC
-                    LIMIT 5
+                    LIMIT 10
                     """,
                     _last_processed,
                 )
 
+                # Collect new events into debounce buffer
                 for row in rows:
                     _last_processed = row["created_at"]
+                    event_db_id = str(row["id"])
+
+                    # Dedup: skip if already processed
+                    if event_db_id in _processed_event_ids:
+                        continue
+                    _processed_event_ids.add(event_db_id)
+                    if len(_processed_event_ids) > _MAX_PROCESSED_IDS:
+                        _processed_event_ids.clear()
+
                     payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
                     metadata = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]
 
@@ -152,83 +172,38 @@ async def run_agent_relay(pool: asyncpg.Pool) -> None:
                     if "googlechat" in sender_id and os.getenv("MATRIX_USER", "") in sender_id:
                         continue
 
-                    from services.agent.matrix_channel_adapter import MatrixChannelAdapter
-                    matrix_adapter = MatrixChannelAdapter(
-                        matrix_sender=sender,
-                        draft_queue=drafts,
-                        confidence_scorer=pipeline._scorer,
-                    )
-                    msg = await matrix_adapter.normalize_inbound(dict(row), payload, metadata)
-                    event = msg.to_legacy_dict()  # backward compat for rest of function
+                    room_id = payload.get("room_id", metadata.get("room_id", ""))
+                    key = (sender_id, room_id)
+                    _debounce_buffer.setdefault(key, []).append((dict(row), payload, metadata))
+                    # Reset deadline: wait for more messages from this sender+room
+                    _debounce_deadline[key] = _time.monotonic() + _DEBOUNCE_SECONDS
 
-                    logger.info(
-                        "agent_relay: processing [%s] %s — %s",
-                        event["room_name"] or event["room_id"][:20],
-                        event["sender"],
-                        body[:60],
-                    )
+                # Process groups whose debounce deadline has passed
+                now = _time.monotonic()
+                ready_keys = [k for k, deadline in _debounce_deadline.items() if now >= deadline]
 
-                    # --- Agent Pipeline ---
-                    try:
-                        result = await pipeline.process_event(event)
-                        logger.info(
-                            "agent_relay: %s conf=%.2f action=%s reply=%s",
-                            result.mode,
-                            result.confidence,
-                            result.action,
-                            result.reply_text[:60] if result.reply_text else "None",
-                        )
-
-                        # Publish agent result to Redis (for Telegram notifier + dashboard)
-                        if redis_client and result.action in ("drafted", "auto_sent"):
-                            await _publish_safe(redis_client, {
-                                "source": "agent",
-                                "event_type": f"agent.{result.action}",
-                                "action": result.action,
-                                "room_name": event.get("room_name", ""),
-                                "sender": event.get("sender", ""),
-                                "body": event.get("body", "")[:200],
-                                "reply_text": result.reply_text[:500] if result.reply_text else "",
-                                "draft_id": result.draft_id or "",
-                                "confidence": result.confidence,
-                            })
-
-                    except Exception as exc:
-                        logger.error("agent_relay: pipeline error: %s", exc)
+                for key in ready_keys:
+                    entries = _debounce_buffer.pop(key, [])
+                    _debounce_deadline.pop(key, None)
+                    if not entries:
                         continue
 
-                    # --- Workflow Engine ---
-                    if engine:
-                        try:
-                            # Enrich event with domain-level type + pipeline results
-                            workflow_event = {
-                                **event,
-                                "type": "chat_message",
-                                "intent": result.intent,
-                                "action": result.action,
-                                "confidence": result.confidence,
-                            }
-                            actions = await engine.handle_event(workflow_event)
-                            for wa in actions:
-                                logger.info(
-                                    "agent_relay: workflow '%s' action=%s state=%s",
-                                    wa.workflow_name, wa.action_type, wa.state_name,
-                                )
-                                # Publish workflow action to Redis
-                                if redis_client:
-                                    await _publish_safe(redis_client, {
-                                        "source": "workflow",
-                                        "event_type": "workflow.action",
-                                        "workflow_name": wa.workflow_name,
-                                        "workflow_id": wa.workflow_id,
-                                        "action_type": wa.action_type,
-                                        "state": wa.state_name,
-                                        "success": wa.result.success,
-                                        "needs_approval": wa.result.needs_approval,
-                                        "output": wa.result.output,
-                                    })
-                        except Exception as exc:
-                            logger.error("agent_relay: workflow error: %s", exc)
+                    # Use the LAST row as the primary event (most recent message)
+                    last_row, last_payload, last_metadata = entries[-1]
+
+                    # Combine bodies from all messages in the batch
+                    if len(entries) > 1:
+                        combined_body = "\n".join(e[1].get("body", "") for e in entries)
+                        last_payload = {**last_payload, "body": combined_body}
+                        logger.info(
+                            "agent_relay: batched %d messages from %s in %s",
+                            len(entries), key[0][:30], key[1][:20],
+                        )
+
+                    await _process_event(
+                        last_row, last_payload, last_metadata,
+                        pipeline, sender, drafts, engine, redis_client,
+                    )
 
             except Exception as exc:
                 logger.error("agent_relay: poll error: %s", exc)
@@ -243,6 +218,96 @@ async def run_agent_relay(pool: asyncpg.Pool) -> None:
                 await redis_client.close()
             except Exception:
                 pass
+
+
+async def _process_event(
+    row: dict,
+    payload: dict,
+    metadata: dict,
+    pipeline,
+    matrix_sender,
+    drafts,
+    engine,
+    redis_client,
+) -> None:
+    """Process a single (possibly batched) event through the agent pipeline + workflows."""
+    from services.agent.matrix_channel_adapter import MatrixChannelAdapter
+
+    body = payload.get("body", "")
+    matrix_adapter = MatrixChannelAdapter(
+        matrix_sender=matrix_sender,
+        draft_queue=drafts,
+        confidence_scorer=pipeline._scorer,
+    )
+    msg = await matrix_adapter.normalize_inbound(row, payload, metadata)
+    event = msg.to_legacy_dict()
+
+    logger.info(
+        "agent_relay: processing [%s] %s — %s",
+        event["room_name"] or event["room_id"][:20],
+        event["sender"],
+        body[:60],
+    )
+
+    # --- Agent Pipeline ---
+    try:
+        result = await pipeline.process_event(event)
+        logger.info(
+            "agent_relay: %s conf=%.2f action=%s reply=%s",
+            result.mode,
+            result.confidence,
+            result.action,
+            result.reply_text[:60] if result.reply_text else "None",
+        )
+
+        # Publish agent result to Redis (for Telegram notifier + dashboard)
+        if redis_client and result.action in ("drafted", "auto_sent"):
+            await _publish_safe(redis_client, {
+                "source": "agent",
+                "event_type": f"agent.{result.action}",
+                "action": result.action,
+                "room_name": event.get("room_name", ""),
+                "sender": event.get("sender", ""),
+                "body": event.get("body", "")[:200],
+                "reply_text": result.reply_text[:500] if result.reply_text else "",
+                "draft_id": result.draft_id or "",
+                "confidence": result.confidence,
+            })
+
+    except Exception as exc:
+        logger.error("agent_relay: pipeline error: %s", exc)
+        return
+
+    # --- Workflow Engine ---
+    if engine:
+        try:
+            workflow_event = {
+                **event,
+                "type": "chat_message",
+                "intent": result.intent,
+                "action": result.action,
+                "confidence": result.confidence,
+            }
+            actions = await engine.handle_event(workflow_event)
+            for wa in actions:
+                logger.info(
+                    "agent_relay: workflow '%s' action=%s state=%s",
+                    wa.workflow_name, wa.action_type, wa.state_name,
+                )
+                if redis_client:
+                    await _publish_safe(redis_client, {
+                        "source": "workflow",
+                        "event_type": "workflow.action",
+                        "workflow_name": wa.workflow_name,
+                        "workflow_id": wa.workflow_id,
+                        "action_type": wa.action_type,
+                        "state": wa.state_name,
+                        "success": wa.result.success,
+                        "needs_approval": wa.result.needs_approval,
+                        "output": wa.result.output,
+                    })
+        except Exception as exc:
+            logger.error("agent_relay: workflow error: %s", exc)
 
 
 async def _publish_safe(redis_client, data: dict) -> None:

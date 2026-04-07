@@ -141,6 +141,21 @@ def get_room_names(hs, token, room_ids):
     return names
 
 
+def get_room_member_name(hs, token, room_id, sender, own_puppet_prefix):
+    """For DM rooms with no m.room.name, resolve display name from the sender's member event."""
+    try:
+        enc_room = urllib.parse.quote(room_id)
+        enc_sender = urllib.parse.quote(sender)
+        result = matrix_api(
+            "GET",
+            f"/rooms/{enc_room}/state/m.room.member/{enc_sender}",
+            hs=hs, token=token,
+        )
+        return result.get("displayname", "")
+    except Exception:
+        return ""
+
+
 def parse_message(event, room_id, room_name):
     """Parse a Matrix event into a compact message dict."""
     content = event.get("content", {})
@@ -236,12 +251,23 @@ def sync_loop(hs, token, own_puppet_prefix, redis_url=None):
             result = matrix_api("GET", f"/sync?{params}", hs=hs, token=token, timeout=10)
             since = result.get("next_batch", "")
             save_since_token(since)
-            # Cache room names
+            # Cache room names (and member display names for DM rooms)
             for rid in result.get("rooms", {}).get("join", {}):
                 state_evts = result["rooms"]["join"][rid].get("state", {}).get("events", [])
+                members = {}
                 for e in state_evts:
                     if e.get("type") == "m.room.name":
                         room_names[rid] = e["content"].get("name", "")
+                    elif e.get("type") == "m.room.member":
+                        dn = e.get("content", {}).get("displayname", "")
+                        if dn:
+                            members[e.get("state_key", "")] = dn
+                # For rooms with no name, use other member's display name (DM heuristic)
+                if not room_names.get(rid) and members:
+                    other_names = [dn for uid, dn in members.items()
+                                   if not (own_puppet and uid.startswith(own_puppet))]
+                    if other_names:
+                        room_names[rid] = other_names[0]
             print(f"[listener] Initial sync done. {len(room_names)} rooms. Token: {since[:30]}...", flush=True)
         except Exception as e:
             print(f"[listener] Initial sync failed: {e}", flush=True)
@@ -300,7 +326,14 @@ def sync_loop(hs, token, own_puppet_prefix, redis_url=None):
                         if not mentioned:
                             continue
 
-                    msg = parse_message(event, rid, rname)
+                    # Resolve display name for DM rooms with no m.room.name
+                    effective_rname = rname
+                    if not effective_rname and sender:
+                        effective_rname = get_room_member_name(hs, token, rid, sender, own_puppet)
+                        if effective_rname:
+                            room_names[rid] = effective_rname  # cache for future messages
+
+                    msg = parse_message(event, rid, effective_rname)
                     new_messages.append(msg)
 
             if new_messages:

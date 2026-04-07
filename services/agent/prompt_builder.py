@@ -144,13 +144,13 @@ class PromptBuilder:
         # Strip googlechat_ prefix and numeric IDs for readability
         if sender_display.startswith("@googlechat_"):
             sender_display = sender_display.split(":")[0].replace("@googlechat_", "")
-        # If still a raw number, label as "a colleague"
-        if sender_display.isdigit():
-            sender_display = "a colleague"
+        # If still a raw number, use room_name as fallback (for DMs, room_name = person's name)
+        if sender_display.isdigit() and room_name:
+            sender_display = room_name
 
         if mode == "outward":
             header = f"[Message from {sender_display}"
-            if room_name:
+            if room_name and room_name != sender_display:
                 header += f" in {room_name}"
             header += f" | intent: {intent}]"
             return f"{header}\n\n{body}"
