@@ -29,19 +29,46 @@ openkhang/
 │   │   ├── scheduler.py       # IngestScheduler orchestrator
 │   │   ├── sync_state.py      # SyncState tracker
 │   │   └── tests/             # Unit tests
-│   ├── agent/
+│   ├── agent/                 # Agentic architecture (35 files, ~4500 LOC)
 │   │   ├── __init__.py
-│   │   ├── pipeline.py        # Main orchestrator (300+ LOC, consider split)
-│   │   ├── classifier.py      # MessageClassifier
-│   │   ├── confidence.py      # ConfidenceScorer
-│   │   ├── prompt_builder.py  # PromptBuilder
-│   │   ├── llm_client.py      # LLMClient (Claude API)
-│   │   ├── draft_queue.py     # DraftQueue manager
-│   │   ├── matrix_sender.py   # MatrixSender
+│   │   │
+│   │   ├── pipeline.py        # Main orchestrator; dispatch to skills
+│   │   ├── classifier.py      # MessageClassifier (6-class)
+│   │   ├── confidence.py      # ConfidenceScorer + modifiers
+│   │   ├── prompt_builder.py  # PromptBuilder (RAG-aware)
+│   │   ├── llm_client.py      # LLMClient (Meridian > Claude API)
+│   │   ├── draft_queue.py     # DraftQueue (pending/approved/edited)
+│   │   │
+│   │   ├── channel_adapter.py           # ChannelAdapter ABC
+│   │   ├── matrix_channel_adapter.py    # Matrix/Google Chat
+│   │   ├── dashboard_channel_adapter.py # Dashboard twin chat
+│   │   ├── telegram_channel_adapter.py  # Telegram (future)
+│   │   ├── response_router.py           # Dispatch by channel
+│   │   │
+│   │   ├── tool_registry.py   # BaseTool ABC + registry
+│   │   ├── tools/             # 7 tools (~800 LOC)
+│   │   │   ├── search_knowledge_tool.py
+│   │   │   ├── search_code_tool.py
+│   │   │   ├── create_draft_tool.py
+│   │   │   ├── send_message_tool.py
+│   │   │   ├── lookup_person_tool.py
+│   │   │   ├── get_sender_context_tool.py
+│   │   │   └── get_room_history_tool.py
+│   │   │
+│   │   ├── skill_registry.py  # BaseSkill ABC + registry
+│   │   ├── skills/            # 3 skills (~1300 LOC)
+│   │   │   ├── outward_reply_skill.py      # Draft gen (deterministic)
+│   │   │   ├── inward_query_skill.py       # Claude tool_use
+│   │   │   ├── send_as_khanh_skill.py      # Send action
+│   │   │   └── skill_helpers.py
+│   │   │
+│   │   ├── tool_calling_loop.py # ReAct loop (inward only)
+│   │   │
 │   │   ├── prompts/           # Prompt templates
 │   │   │   ├── outward_system.md
 │   │   │   └── inward_system.md
-│   │   └── tests/
+│   │   │
+│   │   └── tests/             # Unit tests
 │   ├── workflow/
 │   │   ├── __init__.py
 │   │   ├── state_machine.py   # StateMachine parser
@@ -346,6 +373,142 @@ import yaml
 with open("config/persona.yaml") as f:
     config = yaml.safe_load(f)
 ```
+
+## Tools & Skills (Agent Agentic Patterns)
+
+### Tool Conventions
+
+Tools are thin wrappers around service methods. All tools inherit from `BaseTool`:
+
+```python
+from services.agent.tool_registry import BaseTool, ToolResult
+from typing import Any
+
+class SearchKnowledgeTool(BaseTool):
+    """Search semantic memory for relevant context."""
+    
+    def __init__(self, memory_client):
+        self.memory = memory_client
+    
+    @property
+    def name(self) -> str:
+        return "search_knowledge"
+    
+    @property
+    def description(self) -> str:
+        return "Search semantic memory for relevant discussions"
+    
+    @property
+    def parameters(self) -> dict:
+        """Claude tool_use schema (JSON)."""
+        return {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural language search query"
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Number of results (default 5)",
+                    "default": 5
+                }
+            },
+            "required": ["query"]
+        }
+    
+    async def execute(self, query: str, top_k: int = 5) -> ToolResult:
+        """Execute tool; return ToolResult."""
+        try:
+            results = await self.memory.search(query, top_k=top_k)
+            return ToolResult(success=True, data=results)
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+```
+
+**Tool Location:** `services/agent/tools/{name}_tool.py`  
+**Registration:** In `pipeline.py`, register with `ToolRegistry`  
+**Usage:** Called by skills or inward_query_skill via tool_calling_loop
+
+### Skill Conventions
+
+Skills are composable units for mode+intent combinations. All skills inherit from `BaseSkill`:
+
+```python
+from services.agent.skill_registry import BaseSkill, SkillContext
+from typing import Any
+
+class OutwardReplySkill(BaseSkill):
+    """Deterministic skill for generating draft replies (safety-first)."""
+    
+    @property
+    def name(self) -> str:
+        return "outward_reply"
+    
+    @property
+    def description(self) -> str:
+        return "Generate deterministic draft reply for outward mode"
+    
+    @property
+    def match_criteria(self) -> dict:
+        """Deterministic match rules."""
+        return {
+            "mode": "outward",
+            "intent": ["work", "question"],  # Only match these intents
+            "body_pattern": None  # No additional pattern matching
+        }
+    
+    async def execute(
+        self,
+        event: dict,
+        tools: Any,
+        llm: Any,
+        context: SkillContext
+    ) -> dict:
+        """Execute skill; return AgentResult dict."""
+        # Classify message
+        classification = await context.classifier.classify_event(event)
+        
+        # Search memory for context
+        context_results = await tools.execute(
+            "search_knowledge",
+            query=event.get("body", "")
+        )
+        
+        # Build prompt with RAG
+        prompt = context.prompt_builder.build_user_message(
+            event=event,
+            classification=classification,
+            context=context_results.data
+        )
+        
+        # Call LLM (deterministic, no tool_use)
+        response = await llm.generate([
+            {"role": "system", "content": "...persona prompt..."},
+            {"role": "user", "content": prompt}
+        ])
+        
+        # Score confidence
+        score = await context.scorer.score(
+            response=response,
+            event=event,
+            context=context_results.data
+        )
+        
+        # Decide: auto-send or draft
+        should_send = score >= 0.75 and not self._is_sensitive(event)
+        
+        return {
+            "status": "sent" if should_send else "drafted",
+            "draft": response,
+            "confidence": score
+        }
+```
+
+**Skill Location:** `services/agent/skills/{name}_skill.py`  
+**Match Criteria:** Mode, intent, optional body_pattern (first match wins)  
+**Registration:** In `pipeline.py`, register with `SkillRegistry` (order = priority)  
+**Design:** Skills should be focused on a single mode+intent combination
 
 ## Testing
 

@@ -227,51 +227,77 @@ projects:
     extensions: [".kt"]
 ```
 
-### 3. Agent Pipeline (`services/agent/`)
+### 3. Agent Pipeline & Skill System (`services/agent/`)
 
-**Purpose:** Process chat message → generate draft → decide auto/manual review
+**Purpose:** Process message via skills + tools → generate drafts → route responses
 
-**Key Files:**
-- `pipeline.py` — Main orchestrator; coordinates components
-- `classifier.py` — Message classification (work/question/social/humor/greeting)
+**Agentic Architecture (4 layers):**
+
+1. **Channel Adapters** (normalize inbound, route outbound)
+   - `ChannelAdapter` ABC & `CanonicalMessage` format (transport-agnostic)
+   - `MatrixChannelAdapter` — Google Chat via Matrix bridge
+   - `DashboardChannelAdapter` — Web dashboard (twin chat)
+   - `TelegramChannelAdapter` — Telegram (future)
+
+2. **Tool Registry** (thin wrappers around services)
+   - `BaseTool` ABC + `ToolRegistry` (ordered execution)
+   - 7 tools: search_knowledge, search_code, create_draft, send_message, lookup_person, get_sender_context, get_room_history
+
+3. **Skill System** (deterministic mode+intent→skill matching)
+   - `BaseSkill` ABC + `SkillRegistry` (first match wins)
+   - 3 skills:
+     * `OutwardReplySkill` — Deterministic draft generation (safety-critical)
+     * `InwardQuerySkill` — Claude tool_use for dynamic tool selection
+     * `SendAsKhanhSkill` — Execute send action from approved draft
+
+4. **Response Router** (dispatch results to adapters)
+   - `ResponseRouter` — Registry + dispatcher by channel
+
+**Key Components:**
+- `pipeline.py` — Main orchestrator; dispatch to skills via registry
+- `classifier.py` — Message classification (work/question/social/humor/greeting/fyi)
 - `confidence.py` — Confidence scoring + modifiers (room, sender, history)
-- `prompt_builder.py` — Constructs system + user prompts with RAG context
-- `llm_client.py` — Multi-provider LLM client: Meridian (default) > Claude API (fallback)
-- `draft_queue.py` — Manages pending drafts, approval workflow
-- `matrix_sender.py` — Sends approved reply back to Matrix (→ Google Chat)
+- `prompt_builder.py` — System + user prompts with RAG context
+- `llm_client.py` — Multi-provider LLM: Meridian (default) > Claude API (fallback)
+- `tool_calling_loop.py` — ReAct loop for Claude tool_use (inward mode only)
+- `draft_queue.py` — Manages pending/approved/edited drafts
 
-**Pipeline Stages:**
+**Pipeline Stages (Skill-Driven):**
 
 ```
-1. Receive message from matrix-listener (Redis)
+1. Channel Adapter normalizes inbound to CanonicalMessage
    ↓
-2. Classify message (work/question/social/greeting/humor/fyi)
+2. SkillRegistry matches mode+intent+body_pattern → BaseSkill
    ↓
-3. Fetch context:
-   • Search semantic memory (similar past discussions)
-   • Get episodic events (last N days of activity)
-   • Get sender's role/history
+3. Skill executes:
+   
+   **Outward Mode (reply-gen):**
+     a. Classify message (work/question/social/etc)
+     b. Search memory (semantic + episodic context)
+     c. Build prompt (system + RAG context + user)
+     d. Call LLM via Meridian or Claude API
+     e. Score confidence + apply modifiers
+     f. Decide: auto-send vs draft
+     g. Enqueue in draft_replies or send immediately
+   
+   **Inward Mode (query):**
+     a. Build system prompt (assistant mode, safety rules)
+     b. Start ReAct tool-calling loop:
+        • Call LLM with Claude tool_use
+        • Parse tool_use blocks
+        • Execute tools via ToolRegistry
+        • Re-feed tool results to LLM
+        • Repeat until no more tool calls
+     c. Return final text response
+   
+   **Send Mode (approved drafts):**
+     a. Execute SendAsKhanhSkill
+     b. Call ToolRegistry.send_message() 
+     c. Log to episodic store
+   
+4. ResponseRouter dispatches AgentResult to appropriate adapter
    ↓
-4. Build prompt:
-   • System: persona.yaml (identity, style, never_do rules)
-   • Context: retrieved memory + code snippets
-   • User: classify message + safety instructions
-   ↓
-5. Call LLM via Meridian proxy (Claude Max subscription) or Claude API fallback
-   → Generate draft reply + confidence score
-   ↓
-6. Apply confidence modifiers:
-   • room_modifier (DM: 0.9, group: 1.2)
-   • sender_modifier (lead: 0.8, normal: 1.0)
-   • history_modifier (+0.1 if seen similar before)
-   ↓
-7. Decide: Auto-send or draft?
-   if confidence >= threshold AND not from lead AND room graduated:
-     send immediately via MatrixSender
-   else:
-     queue in draft_replies table for human review
-   ↓
-8. Log to events table (episodic store)
+5. Adapter sends via Matrix/Dashboard/Telegram/etc
 ```
 
 **Confidence Scoring:**

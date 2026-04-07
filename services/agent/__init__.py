@@ -1,7 +1,7 @@
 """Dual-mode agent core for the openkhang digital twin.
 
-Outward mode: acts AS Khanh to colleagues in Google Chat.
-Inward mode: acts AS assistant to Khanh via dashboard/CLI.
+Outward mode: acts AS the owner to colleagues in Google Chat.
+Inward mode: acts AS assistant to the owner via dashboard/CLI.
 """
 
 from .pipeline import AgentPipeline, AgentResult

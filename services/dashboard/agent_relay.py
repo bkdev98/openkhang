@@ -152,17 +152,14 @@ async def run_agent_relay(pool: asyncpg.Pool) -> None:
                     if "googlechat" in sender_id and os.getenv("MATRIX_USER", "") in sender_id:
                         continue
 
-                    sender_name = payload.get("sender_id", sender_id)
-                    event = {
-                        "source": "matrix",
-                        "body": body,
-                        "sender": sender_name,
-                        "sender_id": sender_name,
-                        "room_id": payload.get("room_id", metadata.get("room_id", "")),
-                        "room_name": payload.get("room_name", metadata.get("room_name", "")),
-                        "event_id": str(row["id"]),
-                        "thread_event_id": payload.get("thread_event_id", ""),
-                    }
+                    from services.agent.matrix_channel_adapter import MatrixChannelAdapter
+                    matrix_adapter = MatrixChannelAdapter(
+                        matrix_sender=sender,
+                        draft_queue=drafts,
+                        confidence_scorer=pipeline._scorer,
+                    )
+                    msg = await matrix_adapter.normalize_inbound(dict(row), payload, metadata)
+                    event = msg.to_legacy_dict()  # backward compat for rest of function
 
                     logger.info(
                         "agent_relay: processing [%s] %s — %s",

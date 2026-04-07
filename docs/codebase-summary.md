@@ -177,57 +177,109 @@ class IngestScheduler:
 **Integration with Memory:**
 All ingestors call `MemoryClient.add_memory()` after chunking.
 
-### 3. Agent Pipeline (`services/agent/`)
+### 3. Agent Pipeline & Skill System (`services/agent/`)
 
-**Purpose:** Process message → generate draft → score confidence → queue/send
+**Purpose:** Skills + tools → message processing → response routing
 
-**Files (15 total, ~2200 LOC):**
-- `pipeline.py` (380 LOC) — Main orchestrator; coordinates components
-- `classifier.py` (165 LOC) — `MessageClassifier`, LLM-based classification
+**Files (35 total, ~4500 LOC):**
+
+**Core Orchestration:**
+- `pipeline.py` (420 LOC) — Main orchestrator; dispatch to skills
+- `classifier.py` (165 LOC) — `MessageClassifier`, 6-class classification
 - `confidence.py` (255 LOC) — `ConfidenceScorer`, scoring + modifiers
-- `prompt_builder.py` (280 LOC) — `PromptBuilder`, system + user + context
-- `llm_client.py` (300 LOC) — `LLMClient`, multi-provider: Meridian (default) > Claude API (fallback)
-- `draft_queue.py` (225 LOC) — `DraftQueue`, manage pending/approved drafts
-- `matrix_sender.py` (155 LOC) — `MatrixSender`, send to Matrix homeserver
+- `prompt_builder.py` (280 LOC) — `PromptBuilder`, RAG-aware prompt building
+- `llm_client.py` (300 LOC) — `LLMClient`, multi-provider (Meridian > Claude API)
+- `draft_queue.py` (225 LOC) — `DraftQueue`, manage pending/approved/edited drafts
+
+**Agentic Architecture:**
+- `channel_adapter.py` (115 LOC) — `ChannelAdapter` ABC, `CanonicalMessage` dataclass
+- `matrix_channel_adapter.py` (180 LOC) — Matrix (Google Chat) adapter
+- `dashboard_channel_adapter.py` (85 LOC) — Dashboard adapter (twin chat)
+- `telegram_channel_adapter.py` (25 LOC) — Telegram adapter
+- `response_router.py` (85 LOC) — `ResponseRouter`, dispatch by channel
+
+**Tool System:**
+- `tool_registry.py` (85 LOC) — `BaseTool` ABC, `ToolRegistry`
+- `tools/` (7 files, ~800 LOC total):
+  * `search_knowledge_tool.py` — Query semantic memory
+  * `search_code_tool.py` — Search code repositories
+  * `create_draft_tool.py` — Create draft reply
+  * `send_message_tool.py` — Send message to channel
+  * `lookup_person_tool.py` — Find person context
+  * `get_sender_context_tool.py` — Get sender role/history
+  * `get_room_history_tool.py` — Fetch room message history
+
+**Skill System:**
+- `skill_registry.py` (100 LOC) — `BaseSkill` ABC, `SkillRegistry`, deterministic matching
+- `skills/` (4 files, ~1300 LOC total):
+  * `outward_reply_skill.py` (200 LOC) — Draft generation (deterministic, safety-first)
+  * `inward_query_skill.py` (180 LOC) — Claude tool_use for dynamic tool selection
+  * `send_as_khanh_skill.py` (190 LOC) — Execute approved draft send
+  * `skill_helpers.py` — Shared utilities
+
+**Tool-Calling Loop:**
+- `tool_calling_loop.py` (150 LOC) — ReAct loop for Claude tool_use (inward only)
+
+**Prompts & Config:**
 - `prompts/outward_system.md` — System prompt for outward mode
-- `prompts/inward_system.md` — System prompt for inward mode
-- `tests/` — Unit tests (4 files)
+- `prompts/inward_system.md` — System prompt for inward (assistant) mode
+- `prompts/` — Other prompt templates
+
+**Tests:**
+- `tests/` (8 files, ~1200 LOC) — Unit tests for all components
 
 **Key Classes:**
 ```python
+# Channel Adapters
+class ChannelAdapter(ABC):
+    async def normalize_inbound(payload: dict) -> CanonicalMessage
+    async def send_outbound(result: AgentResult, msg: CanonicalMessage) -> str | None
+
+class ResponseRouter:
+    def register(channel: str, adapter: ChannelAdapter)
+    async def dispatch(result: AgentResult, msg: CanonicalMessage) -> str | None
+
+# Tools
+class BaseTool(ABC):
+    @property name() -> str
+    @property description() -> str
+    @property parameters() -> dict  # JSON Schema
+    async def execute(**kwargs) -> ToolResult
+
+class ToolRegistry:
+    def register(tool: BaseTool)
+    async def execute(tool_name: str, **kwargs) -> ToolResult
+    def list_descriptions() -> list[dict]  # For Claude tool_use
+
+# Skills
+class BaseSkill(ABC):
+    @property name() -> str
+    @property match_criteria() -> dict  # {mode, intent, body_pattern}
+    async def execute(event: dict, tools, llm, context: SkillContext) -> Any
+
+class SkillRegistry:
+    def register(skill: BaseSkill)
+    def match(mode: str, intent: str, body: str = "") -> BaseSkill | None
+
+# Core Components
 class MessageClassifier:
-    async def classify(msg: Message) -> str  # "work"|"question"|"social"|"humor"|"greeting"|"fyi"
+    async def classify(msg: Message) -> str  # "work"|"question"|etc
 
 class ConfidenceScorer:
     async def score(response: str, msg: Message, context: List) -> float
-    def apply_modifiers(base: float, room: Room, sender: User) -> float
-
-class PromptBuilder:
-    def build_system_prompt(mode: str = "outward") -> str
-    def build_user_message(msg: Message, context: List) -> str
-    def add_rag_context(context: List[Dict]) -> str
-
-class LLMClient:
-    # Provider priority: Meridian ($0, Max subscription) > Claude API (paid fallback)
-    async def generate(messages: list, temperature: float = 0.3) -> LLMResponse
-    # Meridian auto-started by dashboard lifespan; uses httpx for async HTTP
 
 class DraftQueue:
     async def enqueue(draft: DraftReply)
     async def get_pending(room_id: Optional[str]) -> List[DraftReply]
     async def approve(draft_id: str, edited_text: Optional[str])
-    async def reject(draft_id: str)
 ```
 
-**Pipeline Stages (in `pipeline.py`):**
-1. Receive from Redis
-2. Classify message
-3. Search memory (semantic + episodic)
-4. Build prompt with RAG context
-5. Call Claude API
-6. Score confidence + apply modifiers
-7. Decide: auto-send vs draft
-8. Log to events table
+**Pipeline Flow (Skill-Driven):**
+1. ChannelAdapter normalizes inbound → CanonicalMessage
+2. SkillRegistry matches mode+intent+body → BaseSkill
+3. Skill executes (calls tools, LLM, classifier, scorer as needed)
+4. ResponseRouter dispatches AgentResult to adapter
+5. Adapter sends via Matrix/Dashboard/Telegram/etc
 
 **Config:**
 - `config/persona.yaml` — Identity, style, never_do rules

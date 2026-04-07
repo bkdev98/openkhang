@@ -99,6 +99,39 @@ class LLMClient:
             return await self._generate_meridian(messages, model, temperature, max_tokens, require_structured)
         return await self._generate_claude(messages, model, temperature, max_tokens, require_structured)
 
+    async def generate_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        model: str | None = None,
+        temperature: float = 0.5,
+        max_tokens: int = 4096,
+    ) -> dict:
+        """Call LLM with tool definitions and return raw tool-calling response.
+
+        Used exclusively by the inward-mode tool-calling loop. Outward mode
+        MUST NOT call this — it stays deterministic (no tool_use).
+
+        Args:
+            messages: Conversation messages in {role, content} format.
+            tools: Claude-format tool defs from registry.list_descriptions():
+                   [{"name": ..., "description": ..., "input_schema": {...}}]
+            model: Override model ID. None uses provider default.
+            temperature: Sampling temperature.
+            max_tokens: Max tokens in response.
+
+        Returns:
+            dict with keys:
+                text (str): Text portion of response (empty if only tool_use).
+                tool_uses (list[dict]): [{id, name, input}] — empty if text-only.
+                raw_content: Original content block list (for re-feeding to LLM).
+                tokens_used (int): Total tokens consumed.
+                model_used (str): Model identifier string.
+        """
+        if self._provider == "meridian":
+            return await self._generate_with_tools_meridian(messages, tools, model, temperature, max_tokens)
+        return await self._generate_with_tools_claude(messages, tools, model, temperature, max_tokens)
+
     # ------------------------------------------------------------------
     # Meridian provider (Claude via Max subscription proxy)
     # ------------------------------------------------------------------
@@ -173,6 +206,188 @@ class LLMClient:
             latency_ms=latency_ms,
             structured=require_structured,
         )
+
+    # ------------------------------------------------------------------
+    # Tool-calling: Meridian (OpenAI-compatible format)
+    # ------------------------------------------------------------------
+
+    async def _generate_with_tools_meridian(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        model: str | None,
+        temperature: float,
+        max_tokens: int,
+    ) -> dict:
+        """Generate with tools via Meridian proxy (OpenAI function-calling format).
+
+        Converts Claude tool defs (input_schema) → OpenAI format (parameters).
+        Parses tool_calls from the response choice message.
+        """
+        import httpx
+
+        model_id = model or DEFAULT_MERIDIAN_MODEL
+        system_prompt: Optional[str] = None
+        convo_messages: list[dict] = []
+
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_prompt = msg["content"]
+            else:
+                convo_messages.append(msg)
+
+        if system_prompt:
+            convo_messages.insert(0, {"role": "system", "content": system_prompt})
+
+        # Convert Claude tool format → OpenAI function format
+        openai_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t.get("description", ""),
+                    "parameters": t.get("input_schema", {}),
+                },
+            }
+            for t in tools
+        ]
+
+        payload = {
+            "model": model_id,
+            "messages": convo_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+            "tools": openai_tools,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    f"{self._meridian_url}/v1/chat/completions",
+                    json=payload,
+                    headers={"Authorization": "Bearer placeholder"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+        except httpx.ConnectError as exc:
+            raise RuntimeError(
+                f"Meridian not reachable at {self._meridian_url}. "
+                "Start it with: meridian"
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                f"Meridian error {exc.response.status_code}: {exc.response.text}"
+            ) from exc
+
+        tokens_used = data.get("usage", {}).get("total_tokens", 0)
+        choice_message = data["choices"][0]["message"]
+        text = choice_message.get("content") or ""
+        raw_tool_calls = choice_message.get("tool_calls") or []
+
+        # Normalise OpenAI tool_calls → internal format [{id, name, input}]
+        tool_uses = []
+        for tc in raw_tool_calls:
+            import json as _json
+            fn = tc.get("function", {})
+            try:
+                tool_input = _json.loads(fn.get("arguments", "{}"))
+            except (_json.JSONDecodeError, ValueError):
+                tool_input = {}
+            tool_uses.append({"id": tc["id"], "name": fn["name"], "input": tool_input})
+
+        # Build raw_content in Claude-compatible format so it can be re-fed
+        raw_content: list[dict] = []
+        if text:
+            raw_content.append({"type": "text", "text": text})
+        for tu in tool_uses:
+            raw_content.append({
+                "type": "tool_use",
+                "id": tu["id"],
+                "name": tu["name"],
+                "input": tu["input"],
+            })
+
+        return {
+            "text": text,
+            "tool_uses": tool_uses,
+            "raw_content": raw_content,
+            "tokens_used": tokens_used,
+            "model_used": f"meridian/{model_id}",
+        }
+
+    # ------------------------------------------------------------------
+    # Tool-calling: Claude API (Anthropic format)
+    # ------------------------------------------------------------------
+
+    async def _generate_with_tools_claude(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        model: str | None,
+        temperature: float,
+        max_tokens: int,
+    ) -> dict:
+        """Generate with tools via Anthropic Claude API (native tool_use format).
+
+        Claude tool defs from registry are already in Anthropic format
+        (input_schema key), so they are passed through directly.
+        """
+        import anthropic
+
+        model_id = model or DEFAULT_CLAUDE_MODEL
+        system_prompt: Optional[str] = None
+        convo_messages: list[dict] = []
+
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_prompt = msg["content"]
+            else:
+                convo_messages.append(msg)
+
+        try:
+            kwargs: dict = {
+                "model": model_id,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "messages": convo_messages,
+                "tools": tools,  # Anthropic format — matches registry.list_descriptions()
+            }
+            if system_prompt:
+                kwargs["system"] = system_prompt
+
+            resp = await self._anthropic_client.messages.create(**kwargs)
+            tokens_used = resp.usage.input_tokens + resp.usage.output_tokens
+
+        except anthropic.APIStatusError as exc:
+            raise RuntimeError(f"Claude API error {exc.status_code}: {exc.message}") from exc
+        except anthropic.APIConnectionError as exc:
+            raise RuntimeError(f"Claude API connection failed: {exc}") from exc
+
+        text = ""
+        tool_uses = []
+        raw_content = []
+
+        for block in resp.content:
+            if block.type == "text":
+                text = block.text
+                raw_content.append({"type": "text", "text": block.text})
+            elif block.type == "tool_use":
+                tool_uses.append({"id": block.id, "name": block.name, "input": block.input})
+                raw_content.append({
+                    "type": "tool_use",
+                    "id": block.id,
+                    "name": block.name,
+                    "input": block.input,
+                })
+
+        return {
+            "text": text,
+            "tool_uses": tool_uses,
+            "raw_content": raw_content,
+            "tokens_used": tokens_used,
+            "model_used": model_id,
+        }
 
     # ------------------------------------------------------------------
     # Claude API provider (paid fallback)

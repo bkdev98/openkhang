@@ -1,8 +1,13 @@
-"""Main agent pipeline: event → classify → RAG → prompt → LLM → route.
+"""Main agent pipeline: event → classify → skill dispatch → route.
 
 AgentPipeline is the single entry point for processing any incoming event.
 It wires together Classifier, MemoryClient, PromptBuilder, LLMClient,
-ConfidenceScorer, DraftQueue, and MatrixSender.
+ConfidenceScorer, DraftQueue, MatrixSender, ToolRegistry, and SkillRegistry.
+
+Phase 3: process_event() now delegates to the matched skill instead of
+running inline logic. The original inline code is preserved in
+_process_inline() as a safety-net fallback (should never be reached once
+all skills are registered).
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ from .draft_queue import DraftQueue
 from .llm_client import LLMClient, LLMResponse
 from .matrix_sender import MatrixSender
 from .prompt_builder import PromptBuilder
+from .skill_registry import SkillContext, SkillRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +35,7 @@ logger = logging.getLogger(__name__)
 RAG_LIMIT = 10
 SENDER_CONTEXT_LIMIT = 5
 
-# Episodic event type for agent-sent messages
+# Episodic event types for audit trail
 EPISODIC_TYPE_AGENT_REPLY = "agent.reply.sent"
 EPISODIC_TYPE_DRAFT_QUEUED = "agent.reply.drafted"
 
@@ -38,20 +44,20 @@ EPISODIC_TYPE_DRAFT_QUEUED = "agent.reply.drafted"
 class AgentResult:
     """Result of processing one event through the pipeline."""
 
-    mode: str                          # 'outward' | 'inward'
-    intent: str                        # classified intent label
-    reply_text: str                    # generated reply
-    confidence: float                  # final confidence score (0.0–1.0)
-    action: str                        # 'auto_sent' | 'drafted' | 'inward_response' | 'error'
-    draft_id: Optional[str] = None     # set when action == 'drafted'
+    mode: str                               # 'outward' | 'inward'
+    intent: str                             # classified intent label
+    reply_text: str                         # generated reply
+    confidence: float                       # final confidence score (0.0–1.0)
+    action: str                             # 'auto_sent' | 'drafted' | 'inward_response' | 'error'
+    draft_id: Optional[str] = None          # set when action == 'drafted'
     matrix_event_id: Optional[str] = None  # set when action == 'auto_sent'
-    error: Optional[str] = None        # set when action == 'error'
+    error: Optional[str] = None            # set when action == 'error'
     latency_ms: int = 0
     tokens_used: int = 0
 
 
 class AgentPipeline:
-    """Main orchestrator: event → classify → RAG → prompt → LLM → route.
+    """Main orchestrator: event → classify → skill dispatch → route.
 
     Usage:
         pipeline = AgentPipeline.from_env()
@@ -75,6 +81,8 @@ class AgentPipeline:
         self._prompt_builder = PromptBuilder()
         self._scorer = ConfidenceScorer()
         self._style_examples = self._load_style_examples()
+        self._tools = self._init_tools()
+        self._skills_registry = self._init_skills()
 
     @classmethod
     def from_env(cls) -> "AgentPipeline":
@@ -90,7 +98,7 @@ class AgentPipeline:
         memory_client = MemoryClient(config)
         llm_client = LLMClient(
             meridian_url=os.environ.get("MERIDIAN_URL", ""),
-            anthropic_api_key=config.anthropic_api_key,
+            anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
         )
         draft_queue = DraftQueue(database_url=config.database_url)
         matrix_sender = MatrixSender(
@@ -115,9 +123,16 @@ class AgentPipeline:
         await self._drafts.close()
 
     async def process_event(
-        self, event: dict, chat_history: list[dict] | None = None,
+        self,
+        event: "dict | CanonicalMessage",
+        chat_history: list[dict] | None = None,
     ) -> AgentResult:
         """Process one incoming event through the full pipeline.
+
+        Accepts either a plain dict (legacy callers) or a CanonicalMessage
+        (new channel-adapter callers). CanonicalMessage is converted to the
+        internal dict format via to_legacy_dict() so all downstream logic
+        is unchanged.
 
         Args:
             event: Dict with keys:
@@ -128,12 +143,19 @@ class AgentPipeline:
                 - sender_id (str, optional): sender identifier
                 - thread_event_id (str, optional): for threading replies
                 - event_id (str, optional): upstream event UUID
+               OR a CanonicalMessage instance (converted internally).
             chat_history: Optional prior conversation turns for inward mode.
                 Each entry: {"role": "user"|"assistant", "content": str}.
 
         Returns:
             AgentResult describing what happened.
         """
+        from .channel_adapter import CanonicalMessage
+
+        # Normalize CanonicalMessage → dict for all internal code paths
+        if isinstance(event, CanonicalMessage):
+            event = event.to_legacy_dict()
+
         import time
         t0 = time.monotonic()
 
@@ -148,153 +170,30 @@ class AgentPipeline:
             # Step 1: classify mode and intent
             mode = self._classifier.classify_mode(event)
             intent = self._classifier.classify_intent(body, mode)
-            has_deadline_risk = self._classifier.has_deadline_risk(body)
 
-            logger.debug("Event classified: mode=%s intent=%s deadline_risk=%s", mode, intent, has_deadline_risk)
+            logger.debug("Event classified: mode=%s intent=%s", mode, intent)
 
-            # Step 1b: enforce group chat behavioral rules
-            # Skip social/humor/greeting/fyi in group chats UNLESS mentioned
-            is_group = self._is_group_chat(event)
-            is_mentioned = self._is_mentioned(body)
-            if mode == "outward" and is_group and not is_mentioned and intent in ("social", "humor", "greeting", "fyi"):
-                logger.info("Skipping group chat %s intent=%s (behavioral rule: ignore_in_group)",
-                            event.get("room_name", ""), intent)
-                return AgentResult(
-                    mode=mode, intent=intent, reply_text="",
-                    confidence=0.0, action="skipped",
-                    latency_ms=int((time.monotonic() - t0) * 1000),
+            # Step 2: match skill and delegate
+            skill = self._skills_registry.match(mode, intent, body)
+
+            if skill:
+                logger.debug("Dispatching to skill: %s", skill.name)
+                context = SkillContext(
+                    classifier=self._classifier,
+                    scorer=self._scorer,
+                    prompt_builder=self._prompt_builder,
+                    style_examples=self._style_examples,
+                    chat_history=chat_history,
                 )
-
-            # Step 2: RAG — search relevant memories
-            memories = await self._memory.search(
-                body,
-                agent_id=mode,
-                limit=RAG_LIMIT,
-            )
-
-            # Step 2b: search code events for technical questions
-            # Inward mode always searches code (Khanh asks work questions)
-            # Outward mode only when keywords match
-            code_keywords = ["code", "logic", "function", "class", "implement",
-                             "api", "endpoint", "bug", "fix", "error", "crash",
-                             "build", "pipeline", "method", "screen", "view",
-                             "model", "repository", "service", "compose",
-                             "enum", "value", "constant", "config", "source",
-                             "type", "field", "param", "variable", "string",
-                             "money", "payment", "transaction", "wallet"]
-            body_lower = body.lower()
-            # Always search code for: inward mode, questions, requests, or keyword matches
-            should_search_code = (
-                mode == "inward"
-                or intent in ("question", "request")
-                or any(kw in body_lower for kw in code_keywords)
-            )
-            if should_search_code:
-                # Search Mem0 inward memories
-                code_memories = await self._memory.search(
-                    body, agent_id="inward", limit=5,
+                result = await skill.execute(event, self._tools, self._llm, context)
+            else:
+                # Safety-net fallback: no skill matched — run inline logic
+                logger.warning(
+                    "No skill matched mode=%s intent=%s — falling back to inline processing", mode, intent
                 )
-                seen_ids = {m.get("id") for m in memories}
-                for cm in code_memories:
-                    if cm.get("id") not in seen_ids:
-                        memories.append(cm)
+                result = await self._process_inline(event, mode, intent, body, chat_history, t0)
 
-                # Full-text search code chunks in Postgres
-                # Search with original query + CamelCase/snake_case variants
-                search_terms = self._extract_code_search_terms(body)
-                code_results = await self._memory.search_code(search_terms, limit=20)
-                for cr in code_results:
-                    meta = cr.get("metadata", {})
-                    doc_type = meta.get("doc_type", "")
-                    score = 0.8 if doc_type in ("business-logic", "api-spec") else 0.5
-                    memories.append({
-                        "memory": cr["payload"].get("text", "")[:500],
-                        "score": score,
-                        "metadata": meta,
-                    })
-
-            # Step 3: sender relationship context
-            sender_id = event.get("sender_id", "")
-            sender_context: list[dict] = []
-            if sender_id:
-                sender_context = await self._memory.get_related(
-                    sender_id,
-                    agent_id=mode,
-                )
-                sender_context = sender_context[:SENDER_CONTEXT_LIMIT]
-
-            sender_known = bool(sender_context)
-
-            # Step 3b: check if we have conversation history in this room
-            # Only reply in rooms where Khanh has participated before
-            room_id = event.get("room_id", "")
-            has_history_in_room = True  # default True for DMs / unknown
-            if room_id and mode == "outward":
-                try:
-                    has_history_in_room = await self._check_room_history(room_id)
-                except Exception:
-                    has_history_in_room = True  # fail-open
-
-            # Step 3c: fetch recent room messages for outward conversation context
-            room_messages: list[dict] = []
-            if mode == "outward" and room_id:
-                try:
-                    room_messages = await self._memory.get_room_messages(
-                        room_id, limit=30,
-                    )
-                except Exception:
-                    pass  # fail-open: no room history is non-fatal
-
-            # Step 4: build prompt (inject style examples for outward mode)
-            messages = self._prompt_builder.build(
-                mode=mode,
-                intent=intent,
-                memories=memories,
-                sender_context=sender_context,
-                event=event,
-                style_examples=self._style_examples if mode == "outward" else None,
-                chat_history=chat_history if mode == "inward" else None,
-                room_messages=room_messages if mode == "outward" else None,
-            )
-
-            # Step 5: LLM call
-            # Outward: structured JSON (confidence scoring needs it)
-            # Inward: plain text (no JSON wrapper, just the answer)
-            temperature = 0.3 if mode == "outward" else 0.5
-            max_tokens = 4096
-            llm_response: LLMResponse = await self._llm.generate(
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                require_structured=(mode == "outward"),
-            )
-
-            # Step 6: confidence scoring
-            confidence = self._scorer.score(
-                llm_response=llm_response,
-                memories=memories,
-                event=event,
-                has_deadline_risk=has_deadline_risk,
-                sender_known=sender_known,
-                intent=intent,
-                has_history_in_room=has_history_in_room,
-            )
-
-            latency_ms = int((time.monotonic() - t0) * 1000)
-
-            # Step 7: route based on mode and confidence
-            result = await self._route(
-                event=event,
-                mode=mode,
-                intent=intent,
-                reply_text=llm_response.text,
-                confidence=confidence,
-                evidence=llm_response.evidence,
-                latency_ms=latency_ms,
-                tokens_used=llm_response.tokens_used,
-            )
-
-            # Step 8: log to episodic store
+            # Step 3: log to episodic store (cross-cutting concern — stays in pipeline)
             await self._log_event(event, result)
 
             return result
@@ -313,12 +212,49 @@ class AgentPipeline:
             )
 
     # ------------------------------------------------------------------
+    # Registry initialisation
+    # ------------------------------------------------------------------
+
+    def _init_tools(self) -> "ToolRegistry":
+        """Initialize tool registry with all available tools."""
+        from .tool_registry import ToolRegistry
+        from .tools import (
+            SearchKnowledgeTool,
+            SearchCodeTool,
+            GetSenderContextTool,
+            GetRoomHistoryTool,
+            SendMessageTool,
+            LookupPersonTool,
+            CreateDraftTool,
+        )
+        registry = ToolRegistry()
+        registry.register(SearchKnowledgeTool(self._memory))
+        registry.register(SearchCodeTool(self._memory))
+        registry.register(GetSenderContextTool(self._memory))
+        registry.register(GetRoomHistoryTool(self._memory))
+        registry.register(SendMessageTool(self._sender))
+        registry.register(LookupPersonTool())
+        registry.register(CreateDraftTool(self._drafts))
+        return registry
+
+    def _init_skills(self) -> SkillRegistry:
+        """Initialize skill registry. Registration order = priority (first match wins)."""
+        from .skills import OutwardReplySkill, InwardQuerySkill, SendAsOwnerSkill
+
+        registry = SkillRegistry()
+        # SendAsOwnerSkill must come before InwardQuerySkill (more specific pattern)
+        registry.register(SendAsOwnerSkill(self._memory))
+        registry.register(OutwardReplySkill(self._memory, self._drafts, self._sender))
+        registry.register(InwardQuerySkill(self._memory))
+        return registry
+
+    # ------------------------------------------------------------------
     # Style examples
     # ------------------------------------------------------------------
 
     @staticmethod
     def _load_style_examples() -> list[dict]:
-        """Load Khanh's sent messages as few-shot style examples."""
+        """Load owner's sent messages as few-shot style examples."""
         style_path = Path(__file__).parent.parent.parent / "config" / "style_examples.jsonl"
         if not style_path.exists():
             return []
@@ -334,72 +270,173 @@ class AgentPipeline:
         return examples
 
     # ------------------------------------------------------------------
-    # Room history check
+    # Inline fallback (safety net — should not be reached in production)
+    # ------------------------------------------------------------------
+
+    async def _process_inline(
+        self,
+        event: dict,
+        mode: str,
+        intent: str,
+        body: str,
+        chat_history: list[dict] | None,
+        t0: float,
+    ) -> AgentResult:
+        """Original inline pipeline logic, preserved as a fallback.
+
+        This path is taken only when no registered skill matches. It
+        ensures correctness during transition and can be removed once
+        all skills are proven stable (Phase 4+).
+        """
+        import time
+
+        has_deadline_risk = self._classifier.has_deadline_risk(body)
+
+        # Group chat behavioral rules (outward only)
+        is_group = self._is_group_chat(event)
+        is_mentioned = self._is_mentioned(body)
+        if mode == "outward" and is_group and not is_mentioned and intent in ("social", "humor", "greeting", "fyi"):
+            return AgentResult(
+                mode=mode, intent=intent, reply_text="",
+                confidence=0.0, action="skipped",
+                latency_ms=int((time.monotonic() - t0) * 1000),
+            )
+
+        # RAG
+        memories = await self._memory.search(body, agent_id=mode, limit=RAG_LIMIT)
+
+        # Code search
+        code_keywords = [
+            "code", "logic", "function", "class", "implement",
+            "api", "endpoint", "bug", "fix", "error", "crash",
+            "build", "pipeline", "method", "screen", "view",
+            "model", "repository", "service", "compose",
+            "enum", "value", "constant", "config", "source",
+            "type", "field", "param", "variable", "string",
+            "money", "payment", "transaction", "wallet",
+        ]
+        body_lower = body.lower()
+        should_search_code = (
+            mode == "inward"
+            or intent in ("question", "request")
+            or any(kw in body_lower for kw in code_keywords)
+        )
+        if should_search_code:
+            code_memories = await self._memory.search(body, agent_id="inward", limit=5)
+            seen_ids = {m.get("id") for m in memories}
+            for cm in code_memories:
+                if cm.get("id") not in seen_ids:
+                    memories.append(cm)
+            search_terms = self._extract_code_search_terms(body)
+            code_results = await self._memory.search_code(search_terms, limit=20)
+            for cr in code_results:
+                meta = cr.get("metadata", {})
+                doc_type = meta.get("doc_type", "")
+                score = 0.8 if doc_type in ("business-logic", "api-spec") else 0.5
+                memories.append({
+                    "memory": cr["payload"].get("text", "")[:500],
+                    "score": score,
+                    "metadata": meta,
+                })
+
+        sender_id = event.get("sender_id", "")
+        sender_context: list[dict] = []
+        if sender_id:
+            sender_context = await self._memory.get_related(sender_id, agent_id=mode)
+            sender_context = sender_context[:SENDER_CONTEXT_LIMIT]
+        sender_known = bool(sender_context)
+
+        room_id = event.get("room_id", "")
+        has_history_in_room = True
+        if room_id and mode == "outward":
+            try:
+                has_history_in_room = await self._check_room_history(room_id)
+            except Exception:
+                has_history_in_room = True
+
+        room_messages: list[dict] = []
+        if mode == "outward" and room_id:
+            try:
+                room_messages = await self._memory.get_room_messages(room_id, limit=30)
+            except Exception:
+                pass
+
+        messages = self._prompt_builder.build(
+            mode=mode,
+            intent=intent,
+            memories=memories,
+            sender_context=sender_context,
+            event=event,
+            style_examples=self._style_examples if mode == "outward" else None,
+            chat_history=chat_history if mode == "inward" else None,
+            room_messages=room_messages if mode == "outward" else None,
+        )
+
+        temperature = 0.3 if mode == "outward" else 0.5
+        llm_response: LLMResponse = await self._llm.generate(
+            messages=messages,
+            temperature=temperature,
+            max_tokens=4096,
+            require_structured=(mode == "outward"),
+        )
+
+        confidence = self._scorer.score(
+            llm_response=llm_response,
+            memories=memories,
+            event=event,
+            has_deadline_risk=has_deadline_risk,
+            sender_known=sender_known,
+            intent=intent,
+            has_history_in_room=has_history_in_room,
+        )
+
+        latency_ms = int((time.monotonic() - t0) * 1000)
+
+        return await self._route(
+            event=event,
+            mode=mode,
+            intent=intent,
+            reply_text=llm_response.text,
+            confidence=confidence,
+            evidence=llm_response.evidence,
+            latency_ms=latency_ms,
+            tokens_used=llm_response.tokens_used,
+        )
+
+    # ------------------------------------------------------------------
+    # Static helpers (shared with skills via import — kept here for
+    # backward compatibility with any callers that reference them)
     # ------------------------------------------------------------------
 
     @staticmethod
     def _extract_code_search_terms(body: str) -> str:
-        """Convert natural language query to code-relevant search terms.
-
-        Extracts English keywords, generates CamelCase/snake_case variants,
-        and combines with the original query for broader matching.
-        """
         import re
-        # Extract English words (likely code-relevant)
         english_words = re.findall(r"[a-zA-Z_]{3,}", body)
-        # Also extract potential code terms by joining adjacent English words as CamelCase
         terms = set(english_words)
-        # Add CamelCase combination: "money source" → "MoneySource"
         if len(english_words) >= 2:
             camel = "".join(w.capitalize() for w in english_words)
             terms.add(camel)
-            # Also snake_case
             terms.add("_".join(w.lower() for w in english_words))
-        # Add individual words
         for w in english_words:
             terms.add(w)
-        # Combine with original body for Vietnamese context
         return " ".join(terms) + " " + body
 
     @staticmethod
     def _is_mentioned(body: str) -> bool:
-        """Check if message @mentions Khanh (by name or @all)."""
         import re
+        from .matrix_channel_adapter import _get_mention_patterns
         text = body.lower()
-        # Common mention patterns: @khanh, @bui, @all, full name variants
-        mention_patterns = [
-            r"@khanh", r"@bui", r"@all",
-            r"\bkhanh\b", r"\bbui quoc khanh\b",
-        ]
-        return any(re.search(p, text) for p in mention_patterns)
+        return any(re.search(p, text) for p in _get_mention_patterns())
 
     @staticmethod
     def _is_group_chat(event: dict) -> bool:
-        """Detect if event is from a group chat (not a 1:1 DM).
-
-        Heuristics: room_name containing spaces/hyphens or multiple members
-        suggests a group. DMs in Matrix typically have no display name or
-        use the other person's name.
-        """
         room_name = event.get("room_name", "")
-        room_id = event.get("room_id", "")
-        # Matrix group rooms typically have descriptive names
-        # DMs have empty room_name or just the other user's name
         if room_name and (" " in room_name or "-" in room_name or "team" in room_name.lower()):
             return True
-        # Matrix convention: DM room IDs are shorter; groups have longer IDs
-        # But safest: if room_name is set and looks like a channel name, it's a group
         return bool(room_name)
 
     async def _check_room_history(self, room_id: str) -> bool:
-        """Check if we have any prior participation in this room.
-
-        Queries events table for agent replies or seeded history in this room.
-        Uses metadata->>'room_id' for fast lookup.
-        """
-        events = await self._memory.query_events(
-            source="agent", limit=200,
-        )
+        events = await self._memory.query_events(source="agent", limit=200)
         return any(
             (e.get("metadata", {}).get("room_id") == room_id
              or e.get("payload", {}).get("room_id") == room_id)
@@ -407,7 +444,7 @@ class AgentPipeline:
         )
 
     # ------------------------------------------------------------------
-    # Routing logic
+    # Routing logic (used by _process_inline fallback)
     # ------------------------------------------------------------------
 
     async def _route(
@@ -423,7 +460,6 @@ class AgentPipeline:
     ) -> AgentResult:
         """Decide whether to auto-send, draft, or return inward response."""
 
-        # Inward mode: always return directly to caller (no Matrix send)
         if mode == "inward":
             return AgentResult(
                 mode=mode,
@@ -435,13 +471,9 @@ class AgentPipeline:
                 tokens_used=tokens_used,
             )
 
-        # Outward mode: check confidence threshold for this room
         room_id = event.get("room_id", "")
-
-        # Check global autoreply toggle
         from services.dashboard.agent_relay import is_autoreply_enabled
         if self._scorer.should_auto_send(confidence, room_id) and is_autoreply_enabled():
-            # Auto-send via Matrix
             try:
                 matrix_event_id = await self._sender.send(
                     room_id=room_id,
@@ -459,10 +491,8 @@ class AgentPipeline:
                     tokens_used=tokens_used,
                 )
             except RuntimeError as exc:
-                # Rate limit or send failure — fall through to draft queue
                 logger.warning("Auto-send failed (%s), falling back to draft queue", exc)
 
-        # Store as draft for human review
         draft_id = await self._drafts.add_draft(
             room_id=room_id,
             original_message=event.get("body", ""),
@@ -484,7 +514,7 @@ class AgentPipeline:
         )
 
     # ------------------------------------------------------------------
-    # Episodic logging
+    # Episodic logging (cross-cutting concern — stays in pipeline)
     # ------------------------------------------------------------------
 
     async def _log_event(self, event: dict, result: AgentResult) -> None:
@@ -507,7 +537,7 @@ class AgentPipeline:
                     "draft_id": result.draft_id,
                     "matrix_event_id": result.matrix_event_id,
                     "room_id": event.get("room_id", ""),
-                    "original_body": event.get("body", "")[:500],  # truncate for storage
+                    "original_body": event.get("body", "")[:500],
                 },
                 metadata={
                     "latency_ms": result.latency_ms,
@@ -515,5 +545,4 @@ class AgentPipeline:
                 },
             )
         except Exception as exc:
-            # Logging failure must never break the pipeline
             logger.warning("Failed to log agent event to episodic store: %s", exc)

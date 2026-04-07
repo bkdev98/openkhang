@@ -1,7 +1,7 @@
 """Mode and intent classifier for the dual-mode agent pipeline.
 
-Mode classification: determines if this event is outward (reply AS Khanh to colleagues)
-or inward (reply AS assistant TO Khanh).
+Mode classification: determines if this event is outward (reply AS the owner to colleagues)
+or inward (reply AS assistant TO the owner).
 
 Intent classification: coarse-grained intent label used to select prompt strategy.
 """
@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import re
 
-# Sources that trigger outward mode (acting as Khanh to colleagues)
+# Sources that trigger outward mode (acting as the owner to colleagues)
 OUTWARD_SOURCES = {"matrix", "chat", "gchat", "google_chat"}
 
-# Sources that trigger inward mode (acting as assistant to Khanh)
+# Sources that trigger inward mode (acting as assistant to the owner)
 INWARD_SOURCES = {"dashboard", "cli", "terminal", "api", "cron"}
 
 # Intent: deadline/commitment keywords — high-risk, lower confidence modifier applied
@@ -58,8 +58,8 @@ class Classifier:
                    carry 'room_id'; CLI/dashboard events carry source='cli'.
 
         Returns:
-            'outward' if acting as Khanh to a colleague,
-            'inward'  if acting as assistant to Khanh.
+            'outward' if acting as the owner to a colleague,
+            'inward'  if acting as assistant to the owner.
         """
         source = (event.get("source") or "").lower()
 
