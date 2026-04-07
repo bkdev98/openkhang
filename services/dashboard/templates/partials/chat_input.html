@@ -1,20 +1,15 @@
 {% if result %}
-<div class="bg-ok-bg border border-ok-border rounded-lg p-3 flex flex-col gap-2">
-    <!-- Question echo -->
-    <div class="text-xs text-gray-500 italic border-l-2 border-gray-600 pl-2">
+<div class="bg-ok-raised border border-ok-border rounded-lg p-3 flex flex-col gap-2">
+    <div class="text-xs text-ok-ghost italic border-l-2 border-ok-ghost pl-2">
         {{ question }}
     </div>
-
     {% if result.error %}
-    <!-- Error state -->
-    <p class="text-red-400 text-sm">{{ result.error }}</p>
+    <p class="text-ok-red text-sm">{{ result.error }}</p>
     {% else %}
-    <!-- Reply text -->
-    <div class="text-sm text-gray-200 leading-relaxed whitespace-pre-wrap">
+    <div class="text-sm text-ok-text leading-relaxed whitespace-pre-wrap">
         {{ result.reply_text }}
     </div>
-    <!-- Metadata -->
-    <div class="flex items-center gap-3 text-xs text-gray-600 font-mono border-t border-ok-border pt-2 mt-1">
+    <div class="flex items-center gap-3 text-[10px] text-ok-ghost font-mono border-t border-ok-border pt-2 mt-1">
         <span>conf: {{ (result.confidence * 100)|int }}%</span>
         <span>latency: {{ result.latency_ms }}ms</span>
     </div>

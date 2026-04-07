@@ -1,0 +1,121 @@
+<div class="page-enter flex flex-col h-[calc(100vh-48px)]">
+
+    <!-- Page header -->
+    <div class="flex items-center justify-between mb-4">
+        <h1 class="font-mono font-semibold text-lg text-ok-text">Chat</h1>
+        <button hx-post="/api/chat/clear"
+                hx-target="#chat-messages"
+                hx-swap="innerHTML"
+                class="text-xs text-ok-ghost hover:text-ok-red transition-colors">
+            Clear History
+        </button>
+    </div>
+
+    <!-- Conversation area -->
+    <div id="chat-messages"
+         class="flex-1 overflow-y-auto feed-scroll flex flex-col gap-3 pb-4"
+         hx-get="/api/chat/history"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+        <div class="text-center py-12">
+            <p class="text-ok-ghost text-sm">Start a conversation with your twin</p>
+            <p class="text-ok-ghost text-xs mt-1">Ask about your context, preferences, or tasks</p>
+        </div>
+    </div>
+
+    <!-- Typing indicator (hidden by default) -->
+    <div id="typing-indicator" class="hidden px-4 py-2">
+        <div class="flex items-center gap-2">
+            <span class="typing-dot"></span>
+            <span class="typing-dot"></span>
+            <span class="typing-dot"></span>
+            <span class="text-xs text-ok-ghost ml-1">thinking...</span>
+        </div>
+    </div>
+
+    <!-- Input area -->
+    <div class="border-t border-ok-border pt-4 mt-auto">
+        <form id="chat-form" class="flex items-end gap-3">
+            <textarea
+                id="chat-input"
+                name="question"
+                placeholder="Ask anything..."
+                rows="1"
+                class="flex-1 bg-ok-srf border border-ok-border rounded-lg px-4 py-3 text-sm text-ok-text
+                       placeholder-ok-ghost focus:outline-none focus:border-ok-amber resize-none
+                       max-h-32 overflow-y-auto"
+                onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey)){event.preventDefault();submitChat()}"
+                oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,128)+'px'"></textarea>
+            <button type="button" onclick="submitChat()"
+                    class="bg-ok-amber hover:bg-ok-ambdim text-ok-void rounded-lg p-3 transition-colors flex-shrink-0">
+                <i data-lucide="arrow-up" class="w-4 h-4"></i>
+            </button>
+        </form>
+        <p class="text-[10px] text-ok-ghost mt-2">⌘+Enter to send</p>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+function submitChat() {
+    var input = document.getElementById('chat-input');
+    var q = input.value.trim();
+    if (!q) return;
+
+    var messages = document.getElementById('chat-messages');
+    var typing = document.getElementById('typing-indicator');
+
+    // Clear placeholder if present
+    if (messages.querySelector('.text-center')) messages.innerHTML = '';
+
+    // Add user bubble
+    var userBubble = document.createElement('div');
+    userBubble.className = 'chat-bubble flex justify-end';
+    userBubble.innerHTML = '<div class="max-w-[80%] bg-ok-amber/15 border border-ok-amber/20 rounded-xl rounded-br px-4 py-3">'
+        + '<p class="text-sm text-ok-text whitespace-pre-wrap">' + escapeHtml(q) + '</p>'
+        + '<span class="text-[10px] text-ok-ghost mt-1 block text-right">' + new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) + '</span>'
+        + '</div>';
+    messages.appendChild(userBubble);
+
+    input.value = '';
+    input.style.height = 'auto';
+    typing.classList.remove('hidden');
+    messages.scrollTop = messages.scrollHeight;
+
+    // Send via fetch
+    var form = new FormData();
+    form.append('question', q);
+    fetch('/api/chat', { method: 'POST', body: form })
+        .then(r => r.json())
+        .then(data => {
+            typing.classList.add('hidden');
+            var twinBubble = document.createElement('div');
+            twinBubble.className = 'chat-bubble flex justify-start';
+            var replyHtml = data.error
+                ? '<p class="text-sm text-ok-red">' + escapeHtml(data.error) + '</p>'
+                : '<div class="text-sm text-ok-text prose-invert prose-sm">' + marked.parse(data.reply_text || '') + '</div>';
+            var meta = data.error ? '' :
+                '<div class="flex items-center gap-3 text-[10px] text-ok-ghost font-mono mt-2 pt-2 border-t border-ok-border">'
+                + '<span>conf: ' + Math.round((data.confidence||0)*100) + '%</span>'
+                + '<span>latency: ' + (data.latency_ms||0) + 'ms</span></div>';
+            twinBubble.innerHTML = '<div class="max-w-[80%] bg-ok-raised border border-ok-border rounded-xl rounded-bl px-4 py-3">'
+                + replyHtml + meta + '</div>';
+            messages.appendChild(twinBubble);
+            messages.scrollTop = messages.scrollHeight;
+        })
+        .catch(err => {
+            typing.classList.add('hidden');
+            var errBubble = document.createElement('div');
+            errBubble.className = 'chat-bubble flex justify-start';
+            errBubble.innerHTML = '<div class="bg-ok-raised border border-ok-border rounded-xl px-4 py-3">'
+                + '<p class="text-sm text-ok-red">Connection error</p></div>';
+            messages.appendChild(errBubble);
+        });
+}
+
+function escapeHtml(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+</script>

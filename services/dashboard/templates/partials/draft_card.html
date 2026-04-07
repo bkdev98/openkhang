@@ -1,84 +1,77 @@
-<!-- Single draft reply card. Used within drafts_list.html -->
-<div class="draft-card bg-ok-bg border border-ok-border rounded-lg p-3 flex flex-col gap-2"
+<!-- Single draft reply card -->
+<div class="draft-card bg-ok-srf border border-ok-border rounded-lg p-4 flex flex-col gap-2 card-hover"
      id="draft-{{ draft.id_short }}">
 
     <!-- Header: room + confidence + timestamp -->
     <div class="flex items-center justify-between gap-2">
         <div class="flex items-center gap-2">
-            <span class="text-xs font-mono text-ok-blue truncate max-w-32"
+            <span class="text-xs font-mono text-ok-amber truncate max-w-40"
                   title="{{ draft.room_id }}">
                 {{ draft.room_name or draft.room_id[:20] }}
             </span>
-            <span class="text-xs px-1.5 py-0.5 rounded font-mono
-                {{ 'bg-green-900 text-green-300' if draft.confidence_pct >= 80
-                   else 'bg-yellow-900 text-yellow-300' if draft.confidence_pct >= 50
-                   else 'bg-red-900 text-red-300' }}">
+            <span class="text-[11px] px-2 py-0.5 rounded-full font-mono
+                {{ 'bg-ok-grndim text-ok-green' if draft.confidence_pct >= 80
+                   else 'bg-ok-amber/15 text-ok-amber' if draft.confidence_pct >= 50
+                   else 'bg-ok-reddim text-ok-red' }}">
                 {{ draft.confidence_pct }}%
             </span>
         </div>
-        <span class="text-xs text-gray-600 font-mono">{{ draft.id_short }}</span>
+        <span class="text-[11px] text-ok-ghost font-mono">{{ draft.created_at_str }}</span>
     </div>
 
     <!-- Original message -->
-    <div class="text-xs text-gray-500 bg-ok-card rounded px-2 py-1 border-l-2 border-gray-600 italic">
-        {{ draft.original_message[:120] }}{% if draft.original_message|length > 120 %}...{% endif %}
+    <div class="text-xs text-ok-muted bg-ok-void rounded-lg px-3 py-2 border-l-2 border-ok-ghost italic">
+        {{ draft.original_message[:150] }}{% if draft.original_message|length > 150 %}...{% endif %}
     </div>
 
-    <!-- Draft reply text (editable) -->
-    <div class="relative">
-        <textarea
-            id="edit-text-{{ draft.id_short }}"
-            rows="3"
-            class="w-full bg-ok-card border border-ok-border rounded px-2 py-1.5 text-xs text-gray-200
-                   font-mono resize-none focus:outline-none focus:border-ok-blue">{{ draft.draft_text }}</textarea>
+    {% if draft.get('readonly') %}
+    <!-- Read-only mode (approved/rejected history) -->
+    <div class="text-xs text-ok-text font-mono bg-ok-raised rounded-lg px-3 py-2">
+        {{ draft.draft_text[:200] }}{% if draft.draft_text|length > 200 %}...{% endif %}
     </div>
+    {% if draft.get('reviewed_at_str') %}
+    <span class="text-[10px] text-ok-ghost">{{ draft.get('reviewer_action', '') }} · {{ draft.reviewed_at_str }}</span>
+    {% endif %}
+    {% else %}
+    <!-- Editable draft text -->
+    <textarea
+        id="edit-text-{{ draft.id_short }}"
+        rows="3"
+        class="w-full bg-ok-raised border border-ok-border rounded-lg px-3 py-2 text-xs text-ok-text
+               font-mono resize-none focus:outline-none focus:border-ok-amber">{{ draft.draft_text }}</textarea>
 
     <!-- Actions -->
     <div class="flex items-center gap-2">
-        <!-- Approve -->
         <button
             hx-post="/api/drafts/{{ draft.id }}/approve"
-            hx-target="#drafts-container"
+            hx-target="#drafts-list"
             hx-swap="innerHTML"
-            class="text-xs px-3 py-1 bg-green-800 hover:bg-green-700 text-green-200
-                   rounded transition-colors font-medium">
+            class="text-xs px-3 py-1.5 border border-ok-green/30 text-ok-green hover:bg-ok-grndim
+                   rounded-lg transition-colors font-medium">
             Approve
         </button>
-
-        <!-- Edit & approve -->
         <button
             onclick="submitEdit('{{ draft.id }}', '{{ draft.id_short }}')"
-            class="text-xs px-3 py-1 bg-ok-accent hover:bg-ok-blue text-white
-                   rounded transition-colors font-medium">
+            class="text-xs px-3 py-1.5 border border-ok-amber/30 text-ok-amber hover:bg-ok-amber/15
+                   rounded-lg transition-colors font-medium">
             Edit & Send
         </button>
-
-        <!-- Reject -->
         <button
             hx-post="/api/drafts/{{ draft.id }}/reject"
-            hx-target="#drafts-container"
+            hx-target="#drafts-list"
             hx-swap="innerHTML"
-            class="text-xs px-3 py-1 bg-red-900 hover:bg-red-800 text-red-300
-                   rounded transition-colors font-medium">
+            class="text-xs px-3 py-1.5 border border-ok-red/30 text-ok-red hover:bg-ok-reddim
+                   rounded-lg transition-colors font-medium">
             Reject
         </button>
-
-        <span class="text-xs text-gray-600 ml-auto">{{ draft.created_at_str }}</span>
     </div>
+    {% endif %}
 </div>
 
 <script>
 function submitEdit(draftId, shortId) {
     var text = document.getElementById('edit-text-' + shortId).value;
-    var form = document.createElement('form');
-    form.style.display = 'none';
-    var input = document.createElement('input');
-    input.name = 'edited_text';
-    input.value = text;
-    form.appendChild(input);
-    document.body.appendChild(form);
     htmx.ajax('POST', '/api/drafts/' + draftId + '/edit',
-        {target: '#drafts-container', swap: 'innerHTML', values: {edited_text: text}});
-    document.body.removeChild(form);
+        {target: '#drafts-list', swap: 'innerHTML', values: {edited_text: text}});
 }
 </script>

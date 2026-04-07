@@ -1,0 +1,74 @@
+<div class="page-enter flex flex-col gap-4">
+
+    <!-- Page header -->
+    <div class="flex items-center justify-between">
+        <h1 class="font-mono font-semibold text-lg text-ok-text">Activity</h1>
+        <span class="flex items-center gap-2">
+            <span class="status-dot ok pulse"></span>
+            <span class="text-xs text-ok-ghost">streaming</span>
+        </span>
+    </div>
+
+    <!-- Source filter pills -->
+    <div class="flex items-center gap-2 flex-wrap" id="source-filters">
+        <button class="filter-pill active" data-source="all"
+                onclick="filterSource('all')">All</button>
+        <button class="filter-pill source-chat" data-source="chat"
+                onclick="filterSource('chat')">
+            <i data-lucide="message-square" class="w-3 h-3"></i> Chat
+        </button>
+        <button class="filter-pill source-jira" data-source="jira"
+                onclick="filterSource('jira')">
+            <i data-lucide="ticket" class="w-3 h-3"></i> Jira
+        </button>
+        <button class="filter-pill source-gitlab" data-source="gitlab"
+                onclick="filterSource('gitlab')">
+            <i data-lucide="git-merge" class="w-3 h-3"></i> GitLab
+        </button>
+        <button class="filter-pill source-confluence" data-source="confluence"
+                onclick="filterSource('confluence')">
+            <i data-lucide="book-open" class="w-3 h-3"></i> Confluence
+        </button>
+        <button class="filter-pill source-agent" data-source="agent"
+                onclick="filterSource('agent')">
+            <i data-lucide="cpu" class="w-3 h-3"></i> Agent
+        </button>
+    </div>
+
+    <!-- Activity feed (server returns pre-rendered HTML cards via SSE) -->
+    <div id="activity-feed"
+         class="flex flex-col gap-1 feed-scroll"
+         hx-ext="sse"
+         sse-connect="/api/feed"
+         sse-swap="message"
+         hx-swap="afterbegin">
+        <p class="text-ok-ghost text-xs text-center py-8">Connecting to live feed...</p>
+    </div>
+
+    <!-- Load more (infinite scroll sentinel) -->
+    <div id="activity-sentinel"
+         hx-get="/api/feed/history"
+         hx-trigger="intersect once"
+         hx-swap="beforebegin"
+         hx-indicator="#load-more-spinner"
+         class="text-center py-4">
+        <span id="load-more-spinner" class="htmx-indicator text-xs text-ok-ghost">Loading older events...</span>
+    </div>
+</div>
+
+<script>
+var _activeSource = 'all';
+function filterSource(src) {
+    _activeSource = src;
+    document.querySelectorAll('.filter-pill').forEach(function(p) {
+        p.classList.toggle('active', p.dataset.source === src);
+    });
+    document.querySelectorAll('#activity-feed .activity-card').forEach(function(card) {
+        card.style.display = (src === 'all' || card.dataset.source === src) ? '' : 'none';
+    });
+}
+// Re-init Lucide icons when new SSE cards arrive
+document.body.addEventListener('htmx:sseMessage', function() {
+    setTimeout(function() { lucide.createIcons(); }, 50);
+});
+</script>

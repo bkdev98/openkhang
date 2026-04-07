@@ -1,25 +1,18 @@
-<div
-    id="health-panel"
-    class="bg-ok-card border border-ok-border rounded-lg">
-    <div class="px-4 py-3 border-b border-ok-border flex items-center justify-between">
-        <span class="text-sm font-semibold text-gray-300">Service Health</span>
-        <span class="text-xs text-gray-500">updated just now</span>
-    </div>
-    <div class="p-3 flex flex-col gap-2">
-        {% if not services %}
-        <p class="text-gray-600 text-xs text-center py-4">No services found</p>
-        {% endif %}
-        {% for svc in services %}
-        <div class="flex items-center justify-between bg-ok-bg rounded px-3 py-2 border border-ok-border">
-            <div class="flex items-center gap-2">
-                <span class="status-dot {{ 'ok' if svc.status == 'ok' else 'error' }}"></span>
-                <span class="text-sm font-mono text-gray-200">{{ svc.name }}</span>
-                <span class="text-xs text-gray-600">{{ svc.type }}</span>
-            </div>
-            <span class="text-xs text-gray-500 truncate max-w-32" title="{{ svc.detail }}">
-                {{ svc.detail[:40] }}{% if svc.detail|length > 40 %}...{% endif %}
-            </span>
+<!-- Compact health for sidebar footer -->
+<span class="text-ok-ghost text-[10px] font-medium uppercase tracking-wider">System</span>
+<div class="flex flex-col gap-1.5">
+    {% for svc in services %}
+    <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+            <span class="status-dot {{ 'ok' if svc.status == 'ok' else 'error' }}"></span>
+            <span class="font-mono text-[11px] text-ok-muted">{{ svc.name }}</span>
         </div>
-        {% endfor %}
+        <span class="font-mono text-[11px] {{ 'text-ok-green' if svc.status == 'ok' else 'text-ok-red' }}">
+            {{ 'OK' if svc.status == 'ok' else 'ERR' }}
+        </span>
     </div>
+    {% endfor %}
+    {% if not services %}
+    <span class="text-[11px] text-ok-ghost">No services detected</span>
+    {% endif %}
 </div>

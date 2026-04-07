@@ -1,31 +1,22 @@
-<div
-    id="stats-bar"
-    class="bg-ok-card border border-ok-border rounded-lg p-4 grid grid-cols-2 gap-3">
-    <div class="col-span-2 flex items-center justify-between mb-2 pb-2 border-b border-ok-border">
-        <span class="text-xs text-gray-400">Auto-reply mode</span>
-        <button
-            hx-post="/api/autoreply/toggle"
-            hx-target="#autoreply-badge"
-            hx-swap="innerHTML"
-            class="cursor-pointer hover:opacity-80 transition-opacity"
-            id="autoreply-badge">
-            <span class="px-2 py-1 rounded text-xs font-bold bg-green-600 text-white">Auto-reply: ON</span>
-        </button>
+<div id="stats-grid" class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <!-- Pending Drafts -->
+    <div class="bg-ok-srf border border-ok-border rounded-lg p-4 card-hover">
+        <p class="stat-number font-mono text-2xl font-semibold text-ok-text">{{ stats.get('pending_drafts', 0) }}</p>
+        <p class="text-[11px] text-ok-muted mt-1">pending drafts</p>
     </div>
-    <div class="flex flex-col">
-        <span class="text-2xl font-mono font-bold text-ok-blue">{{ stats.get('pending_drafts', 0) }}</span>
-        <span class="text-xs text-gray-500 mt-1">pending drafts</span>
+    <!-- Events Today -->
+    <div class="bg-ok-srf border border-ok-border rounded-lg p-4 card-hover">
+        <p class="stat-number font-mono text-2xl font-semibold text-ok-amber">{{ stats.get('events_today', 0) }}</p>
+        <p class="text-[11px] text-ok-muted mt-1">events today</p>
     </div>
-    <div class="flex flex-col">
-        <span class="text-2xl font-mono font-bold text-ok-blue">{{ stats.get('events_today', 0) }}</span>
-        <span class="text-xs text-gray-500 mt-1">events today</span>
+    <!-- Approved Today -->
+    <div class="bg-ok-srf border border-ok-border rounded-lg p-4 card-hover">
+        <p class="stat-number font-mono text-2xl font-semibold text-ok-green">{{ stats.get('approved_today', 0) }}</p>
+        <p class="text-[11px] text-ok-muted mt-1">approved today</p>
     </div>
-    <div class="flex flex-col">
-        <span class="text-2xl font-mono font-bold text-green-400">{{ stats.get('approved_today', 0) }}</span>
-        <span class="text-xs text-gray-500 mt-1">approved today</span>
-    </div>
-    <div class="flex flex-col">
-        <span class="text-2xl font-mono font-bold text-gray-400">{{ stats.get('total_events', 0) }}</span>
-        <span class="text-xs text-gray-500 mt-1">total events</span>
+    <!-- Total Events -->
+    <div class="bg-ok-srf border border-ok-border rounded-lg p-4 card-hover">
+        <p class="stat-number font-mono text-2xl font-semibold text-ok-muted">{{ stats.get('total_events', 0) }}</p>
+        <p class="text-[11px] text-ok-muted mt-1">total events</p>
     </div>
 </div>

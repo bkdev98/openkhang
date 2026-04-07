@@ -4,23 +4,38 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>openkhang — Digital Twin Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     <script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <script>
         tailwind.config = {
             darkMode: 'class',
             theme: {
                 extend: {
                     colors: {
-                        'ok-bg':     '#0f0f1a',
-                        'ok-card':   '#16213e',
-                        'ok-accent': '#0f3460',
-                        'ok-blue':   '#53a8b6',
-                        'ok-border': '#1e2d4a',
+                        'ok-void':   '#0C0C0F',
+                        'ok-srf':    '#141419',
+                        'ok-raised': '#1C1C24',
+                        'ok-hover':  '#24242E',
+                        'ok-border': '#2A2A36',
+                        'ok-bfocus': '#3D3D4A',
+                        'ok-text':   '#E8E4DE',
+                        'ok-muted':  '#9B9690',
+                        'ok-ghost':  '#5C5853',
+                        'ok-amber':  '#E5A84B',
+                        'ok-ambdim': '#A07832',
+                        'ok-green':  '#4ADE80',
+                        'ok-grndim': '#166534',
+                        'ok-red':    '#F87171',
+                        'ok-reddim': '#7F1D1D',
+                        'ok-cyan':   '#67E8F9',
+                        'ok-purple': '#C084FC',
                     },
                     fontFamily: {
-                        mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
                     }
                 }
             }
@@ -28,31 +43,173 @@
     </script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
-<body class="bg-ok-bg text-gray-200 min-h-screen font-sans">
+<body class="bg-ok-void text-ok-text min-h-screen font-sans flex">
 
-    <!-- Nav -->
-    <nav class="bg-ok-card border-b border-ok-border px-6 py-3 flex items-center justify-between">
-        <div class="flex items-center gap-3">
-            <span class="text-ok-blue font-mono font-bold text-lg">openkhang</span>
-            <span class="text-gray-500 text-sm">/ digital twin</span>
+    <!-- Sidebar -->
+    <aside id="sidebar" class="sidebar w-60 bg-ok-srf border-r border-ok-border flex flex-col flex-shrink-0 h-screen sticky top-0">
+        <!-- Logo -->
+        <div class="px-5 py-4 border-b border-ok-border">
+            <span class="font-mono font-semibold text-ok-amber text-base">openkhang</span>
+            <span class="text-ok-ghost text-xs ml-1">v0.2.0</span>
         </div>
-        <div class="flex items-center gap-4 text-xs text-gray-500">
-            <span
-                hx-get="/api/stats"
-                hx-trigger="load, every 30s"
-                hx-target="#nav-stats"
-                id="nav-stats-trigger">
+
+        <!-- Navigation -->
+        <nav class="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto">
+            <span class="text-ok-ghost text-[10px] font-medium uppercase tracking-wider px-2 mb-2">Navigate</span>
+
+            <a href="/pages/overview"
+               class="nav-item active"
+               hx-get="/pages/overview"
+               hx-target="#main-content"
+               hx-swap="innerHTML transition:true"
+               hx-push-url="/pages/overview">
+                <i data-lucide="layout-dashboard" class="w-4 h-4"></i>
+                <span>Overview</span>
+            </a>
+            <a href="/pages/chat"
+               class="nav-item"
+               hx-get="/pages/chat"
+               hx-target="#main-content"
+               hx-swap="innerHTML transition:true"
+               hx-push-url="/pages/chat">
+                <i data-lucide="message-circle" class="w-4 h-4"></i>
+                <span>Chat</span>
+            </a>
+            <a href="/pages/drafts"
+               class="nav-item"
+               hx-get="/pages/drafts"
+               hx-target="#main-content"
+               hx-swap="innerHTML transition:true"
+               hx-push-url="/pages/drafts">
+                <i data-lucide="file-edit" class="w-4 h-4"></i>
+                <span>Drafts</span>
+                <span id="drafts-badge" class="nav-badge hidden">0</span>
+            </a>
+            <a href="/pages/activity"
+               class="nav-item"
+               hx-get="/pages/activity"
+               hx-target="#main-content"
+               hx-swap="innerHTML transition:true"
+               hx-push-url="/pages/activity">
+                <i data-lucide="activity" class="w-4 h-4"></i>
+                <span>Activity</span>
+            </a>
+            <a href="/pages/memory"
+               class="nav-item"
+               hx-get="/pages/memory"
+               hx-target="#main-content"
+               hx-swap="innerHTML transition:true"
+               hx-push-url="/pages/memory">
+                <i data-lucide="brain" class="w-4 h-4"></i>
+                <span>Memory</span>
+            </a>
+            <a href="/pages/settings"
+               class="nav-item"
+               hx-get="/pages/settings"
+               hx-target="#main-content"
+               hx-swap="innerHTML transition:true"
+               hx-push-url="/pages/settings">
+                <i data-lucide="sliders-horizontal" class="w-4 h-4"></i>
+                <span>Settings</span>
+            </a>
+        </nav>
+
+        <!-- Health footer -->
+        <div class="border-t border-ok-border px-4 py-3 flex flex-col gap-2"
+             id="sidebar-health"
+             hx-get="/api/health/compact"
+             hx-trigger="load, every 30s"
+             hx-swap="innerHTML">
+            <span class="text-ok-ghost text-[10px] font-medium uppercase tracking-wider">System</span>
+            <div class="text-ok-ghost text-xs">Loading...</div>
+        </div>
+
+        <!-- Auto-reply toggle -->
+        <div class="border-t border-ok-border px-4 py-3">
+            <div class="flex items-center justify-between">
+                <span class="text-xs text-ok-muted">Auto-reply</span>
+                <span id="autoreply-toggle"
+                  hx-get="/api/autoreply/toggle-state"
+                  hx-trigger="load"
+                  hx-swap="outerHTML">
+                <button hx-post="/api/autoreply/toggle" hx-target="#autoreply-toggle"
+                        hx-swap="outerHTML" class="toggle-btn on">
+                    <span class="toggle-thumb"></span>
+                    <span class="toggle-label">ON</span>
+                </button>
             </span>
-            <span id="nav-stats" class="text-gray-500">loading...</span>
-            <span class="status-dot ok"></span>
-            <span class="text-gray-400">live</span>
+            </div>
         </div>
-    </nav>
+    </aside>
 
     <!-- Main content -->
-    <main class="container mx-auto px-4 py-6 max-w-screen-xl">
-        {% block content %}{% endblock %}
+    <main class="flex-1 min-h-screen overflow-y-auto">
+        <div id="main-content" class="max-w-5xl mx-auto px-6 py-6">
+            {% if page_content %}
+                {% include page_content %}
+            {% else %}
+                {% block content %}{% endblock %}
+            {% endif %}
+        </div>
     </main>
+
+    <!-- Sidebar nav active state management -->
+    <script>
+        // Initialize Lucide icons
+        document.addEventListener('DOMContentLoaded', () => lucide.createIcons());
+
+        // Re-init icons after HTMX swaps (new content may have icon elements)
+        document.body.addEventListener('htmx:afterSwap', () => lucide.createIcons());
+
+        // Active nav highlighting
+        function updateActiveNav() {
+            const path = window.location.pathname;
+            document.querySelectorAll('.nav-item').forEach(item => {
+                const href = item.getAttribute('href');
+                if (href && path.startsWith(href)) {
+                    item.classList.add('active');
+                } else {
+                    item.classList.remove('active');
+                }
+            });
+        }
+        document.body.addEventListener('htmx:pushedIntoHistory', updateActiveNav);
+        document.addEventListener('DOMContentLoaded', updateActiveNav);
+
+        // Update drafts badge count via SSE or polling
+        function updateDraftsBadge(count) {
+            const badge = document.getElementById('drafts-badge');
+            if (!badge) return;
+            if (count > 0) {
+                badge.textContent = count;
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden');
+            }
+        }
+
+        // Time-ago formatter
+        function timeAgo(isoStr) {
+            if (!isoStr) return '';
+            const now = Date.now();
+            const then = new Date(isoStr).getTime();
+            const diff = Math.max(0, now - then);
+            const mins = Math.floor(diff / 60000);
+            if (mins < 1) return 'just now';
+            if (mins < 60) return mins + 'm ago';
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 24) return hrs + 'h ago';
+            const days = Math.floor(hrs / 24);
+            if (days === 1) return 'yesterday';
+            if (days < 7) return days + 'd ago';
+            return new Date(isoStr).toLocaleDateString();
+        }
+
+        // Mobile sidebar toggle
+        function toggleSidebar() {
+            document.getElementById('sidebar').classList.toggle('sidebar-open');
+        }
+    </script>
 
 </body>
 </html>

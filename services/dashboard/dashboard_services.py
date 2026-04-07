@@ -1,4 +1,4 @@
-"""Dashboard backend service adapters: drafts, stats, activity feed, twin chat.
+"""Dashboard backend service adapters: drafts, stats, activity feed, twin chat, memory.
 
 Health checking is delegated to health_checker module.
 """
@@ -55,46 +55,58 @@ class DashboardServices:
     # Drafts
     # ------------------------------------------------------------------
 
-    async def get_drafts(self, limit: int = 20) -> list[dict[str, Any]]:
-        """Return pending draft replies from draft_replies table."""
+    async def get_drafts(
+        self,
+        status: str = "pending",
+        search: str = "",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return draft replies filtered by status and optional search."""
         self._require_pool()
         try:
-            rows = await self._pool.fetch(  # type: ignore[union-attr]
-                """
-                SELECT id, room_id, room_name, original_message, draft_text,
-                       confidence, evidence, created_at
-                FROM draft_replies
-                WHERE status = 'pending'
-                ORDER BY created_at ASC
-                LIMIT $1
-                """,
-                limit,
-            )
-            result = []
-            for row in rows:
-                d = dict(row)
-                if isinstance(d.get("evidence"), str):
-                    try:
-                        d["evidence"] = json.loads(d["evidence"])
-                    except json.JSONDecodeError:
-                        d["evidence"] = []
-                if d.get("created_at"):
-                    d["created_at_str"] = d["created_at"].strftime("%Y-%m-%d %H:%M:%S")
-                d["confidence_pct"] = int(d.get("confidence", 0) * 100)
-                d["id_short"] = str(d["id"])[:8]
-                d["id"] = str(d["id"])
-                result.append(d)
-            return result
+            if search:
+                # Escape LIKE wildcards in search input
+                safe_search = search.replace("%", r"\%").replace("_", r"\_")
+                rows = await self._pool.fetch(  # type: ignore[union-attr]
+                    """
+                    SELECT id, room_id, room_name, original_message, draft_text,
+                           confidence, evidence, status, reviewer_action,
+                           created_at, reviewed_at
+                    FROM draft_replies
+                    WHERE status = $1
+                      AND (room_name ILIKE $2 OR draft_text ILIKE $2 OR original_message ILIKE $2)
+                    ORDER BY created_at DESC
+                    LIMIT $3
+                    """,
+                    status, f"%{safe_search}%", limit,
+                )
+            else:
+                rows = await self._pool.fetch(  # type: ignore[union-attr]
+                    """
+                    SELECT id, room_id, room_name, original_message, draft_text,
+                           confidence, evidence, status, reviewer_action,
+                           created_at, reviewed_at
+                    FROM draft_replies
+                    WHERE status = $1
+                    ORDER BY created_at DESC
+                    LIMIT $2
+                    """,
+                    status, limit,
+                )
+            return [self._normalise_draft(dict(r)) for r in rows]
         except Exception as exc:
             logger.error("get_drafts failed: %s", exc)
             return []
 
     async def approve_draft(self, draft_id: str) -> bool:
-        """Mark draft as approved and send via Matrix. Returns True on success."""
-        # Fetch draft details before transitioning
+        """Mark draft as approved and send via Matrix."""
+        try:
+            uid = UUID(draft_id)
+        except ValueError:
+            return False
         row = await self._pool.fetchrow(  # type: ignore[union-attr]
             "SELECT room_id, draft_text FROM draft_replies WHERE id = $1 AND status = 'pending'",
-            UUID(draft_id),
+            uid,
         )
         if not row:
             return False
@@ -104,11 +116,11 @@ class DashboardServices:
         return ok
 
     async def reject_draft(self, draft_id: str) -> bool:
-        """Mark draft as rejected. Returns True on success."""
+        """Mark draft as rejected."""
         return await self._transition(draft_id, "rejected", "reject")
 
     async def edit_draft(self, draft_id: str, edited_text: str) -> bool:
-        """Edit draft text and mark as approved. Returns True on success."""
+        """Edit draft text and mark as approved."""
         self._require_pool()
         try:
             result = await self._pool.execute(  # type: ignore[union-attr]
@@ -118,15 +130,12 @@ class DashboardServices:
                     reviewed_at = $3, reviewer_action = 'edit'
                 WHERE id = $1 AND status = 'pending'
                 """,
-                UUID(draft_id),
-                edited_text,
-                datetime.now(timezone.utc),
+                UUID(draft_id), edited_text, datetime.now(timezone.utc),
             )
             ok = result == "UPDATE 1"
             if ok:
                 row = await self._pool.fetchrow(  # type: ignore[union-attr]
-                    "SELECT room_id FROM draft_replies WHERE id = $1",
-                    UUID(draft_id),
+                    "SELECT room_id FROM draft_replies WHERE id = $1", UUID(draft_id),
                 )
                 if row:
                     await self._send_matrix_message(row["room_id"], edited_text)
@@ -177,8 +186,6 @@ class DashboardServices:
         self._require_pool()
         try:
             if since:
-                # asyncpg needs datetime, not ISO string
-                from datetime import datetime, timezone
                 if isinstance(since, str):
                     since_dt = datetime.fromisoformat(since)
                 else:
@@ -190,8 +197,7 @@ class DashboardServices:
                     WHERE created_at > $1
                     ORDER BY created_at DESC LIMIT $2
                     """,
-                    since_dt,
-                    limit,
+                    since_dt, limit,
                 )
             else:
                 rows = await self._pool.fetch(  # type: ignore[union-attr]
@@ -207,13 +213,115 @@ class DashboardServices:
             logger.error("get_recent_events failed: %s", exc)
             return []
 
+    async def get_events_before(
+        self,
+        before: str = "",
+        source: str = "",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Fetch events older than `before` timestamp, optionally filtered by source."""
+        self._require_pool()
+        try:
+            if before:
+                before_dt = datetime.fromisoformat(before) if isinstance(before, str) else before
+                if source:
+                    rows = await self._pool.fetch(  # type: ignore[union-attr]
+                        "SELECT id, source, event_type, actor, payload, created_at FROM events "
+                        "WHERE created_at < $1 AND source = $2 ORDER BY created_at DESC LIMIT $3",
+                        before_dt, source, limit,
+                    )
+                else:
+                    rows = await self._pool.fetch(  # type: ignore[union-attr]
+                        "SELECT id, source, event_type, actor, payload, created_at FROM events "
+                        "WHERE created_at < $1 ORDER BY created_at DESC LIMIT $2",
+                        before_dt, limit,
+                    )
+            else:
+                if source:
+                    rows = await self._pool.fetch(  # type: ignore[union-attr]
+                        "SELECT id, source, event_type, actor, payload, created_at FROM events "
+                        "WHERE source = $1 ORDER BY created_at DESC LIMIT $2",
+                        source, limit,
+                    )
+                else:
+                    rows = await self._pool.fetch(  # type: ignore[union-attr]
+                        "SELECT id, source, event_type, actor, payload, created_at FROM events "
+                        "ORDER BY created_at DESC LIMIT $1", limit,
+                    )
+            return [self._normalise_event(dict(r)) for r in rows]
+        except Exception as exc:
+            logger.error("get_events_before failed: %s", exc)
+            return []
+
     # ------------------------------------------------------------------
     # Inward chat
     # ------------------------------------------------------------------
 
     async def ask_twin(self, question: str, session_id: str = "default") -> dict[str, Any]:
-        """Delegate to twin_chat module (keeps heavy pipeline import isolated)."""
+        """Delegate to twin_chat module."""
         return await _ask_twin(question, session_id=session_id)
+
+    # ------------------------------------------------------------------
+    # Memory search & ingestion
+    # ------------------------------------------------------------------
+
+    async def search_memories(self, query: str, limit: int = 20) -> list[dict]:
+        """Search Mem0 memories via MemoryClient."""
+        try:
+            from services.memory.config import MemoryConfig
+            from services.memory.client import MemoryClient
+
+            config = MemoryConfig.from_env()
+            client = MemoryClient(config)
+            await client.connect()
+            try:
+                results = await client.search(query, top_k=limit)
+                return results if isinstance(results, list) else []
+            finally:
+                await client.close()
+        except Exception as exc:
+            logger.error("search_memories failed: %s", exc)
+            return []
+
+    async def delete_memory(self, memory_id: str) -> bool:
+        """Delete a memory entry from Mem0."""
+        try:
+            from services.memory.config import MemoryConfig
+            from services.memory.client import MemoryClient
+
+            config = MemoryConfig.from_env()
+            client = MemoryClient(config)
+            await client.connect()
+            try:
+                await client.delete_memory(memory_id)
+                return True
+            finally:
+                await client.close()
+        except Exception as exc:
+            logger.error("delete_memory failed: %s", exc)
+            return False
+
+    async def ingest_knowledge(self, text: str, source_label: str = "manual") -> bool:
+        """Ingest text as knowledge via MemoryClient."""
+        try:
+            from services.memory.config import MemoryConfig
+            from services.memory.client import MemoryClient
+
+            config = MemoryConfig.from_env()
+            client = MemoryClient(config)
+            await client.connect()
+            try:
+                await client.add_memory(
+                    text,
+                    metadata={"source": source_label, "ingested_via": "dashboard"},
+                    source="manual",
+                )
+                return True
+            finally:
+                await client.close()
+        except Exception as exc:
+            logger.error("ingest_knowledge failed: %s", exc)
+            raise
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -253,16 +361,17 @@ class DashboardServices:
     async def _transition(self, draft_id: str, status: str, action: str) -> bool:
         self._require_pool()
         try:
+            uid = UUID(draft_id)
+        except ValueError:
+            return False
+        try:
             result = await self._pool.execute(  # type: ignore[union-attr]
                 """
                 UPDATE draft_replies
                 SET status = $2, reviewed_at = $3, reviewer_action = $4
                 WHERE id = $1 AND status = 'pending'
                 """,
-                UUID(draft_id),
-                status,
-                datetime.now(timezone.utc),
-                action,
+                uid, status, datetime.now(timezone.utc), action,
             )
             return result == "UPDATE 1"
         except Exception as exc:
@@ -278,6 +387,21 @@ class DashboardServices:
                 d["payload"] = json.loads(d["payload"])
             except json.JSONDecodeError:
                 pass
+        return d
+
+    def _normalise_draft(self, d: dict[str, Any]) -> dict[str, Any]:
+        if isinstance(d.get("evidence"), str):
+            try:
+                d["evidence"] = json.loads(d["evidence"])
+            except json.JSONDecodeError:
+                d["evidence"] = []
+        if d.get("created_at"):
+            d["created_at_str"] = d["created_at"].strftime("%Y-%m-%d %H:%M:%S")
+        if d.get("reviewed_at"):
+            d["reviewed_at_str"] = d["reviewed_at"].strftime("%Y-%m-%d %H:%M:%S")
+        d["confidence_pct"] = int(d.get("confidence", 0) * 100)
+        d["id_short"] = str(d["id"])[:8]
+        d["id"] = str(d["id"])
         return d
 
     def _require_pool(self) -> None:

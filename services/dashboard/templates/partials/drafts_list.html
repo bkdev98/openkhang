@@ -1,13 +1,15 @@
 {% if not drafts %}
 <div class="text-center py-8">
-    <p class="text-gray-600 text-sm">No pending drafts</p>
-    <p class="text-gray-700 text-xs mt-1">New drafts appear when confidence is below threshold</p>
+    <p class="text-ok-ghost text-sm">No {{ status_label or 'pending' }} drafts</p>
+    {% if not status_label or status_label == 'pending' %}
+    <p class="text-ok-ghost text-xs mt-1">Drafts appear when confidence is below threshold</p>
+    {% endif %}
 </div>
 {% else %}
-<div class="flex flex-col gap-3 max-h-72 overflow-y-auto pr-1">
+<div class="flex flex-col gap-3">
     {% for draft in drafts %}
     {% include "partials/draft_card.html" %}
     {% endfor %}
 </div>
-<p class="text-xs text-gray-600 text-right mt-2">{{ drafts|length }} pending</p>
+<p class="text-[11px] text-ok-ghost text-right mt-2">{{ drafts|length }} {{ status_label or 'pending' }}</p>
 {% endif %}

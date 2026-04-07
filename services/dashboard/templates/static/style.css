@@ -1,75 +1,309 @@
-/* openkhang dashboard — minimal custom CSS (scrollbar, animations, status dots) */
+/* openkhang dashboard v2 — warm terminal aesthetic */
 
-/* Thin dark scrollbar */
+/* ============================================================
+   Scrollbars
+   ============================================================ */
 .feed-scroll,
-.overflow-y-auto {
+.overflow-y-auto,
+#main-content {
     scrollbar-width: thin;
-    scrollbar-color: #1e2d4a #0f0f1a;
+    scrollbar-color: #2A2A36 #0C0C0F;
 }
 .feed-scroll::-webkit-scrollbar,
-.overflow-y-auto::-webkit-scrollbar {
+.overflow-y-auto::-webkit-scrollbar,
+#main-content::-webkit-scrollbar {
     width: 4px;
 }
 .feed-scroll::-webkit-scrollbar-track,
-.overflow-y-auto::-webkit-scrollbar-track {
-    background: #0f0f1a;
+.overflow-y-auto::-webkit-scrollbar-track,
+#main-content::-webkit-scrollbar-track {
+    background: #0C0C0F;
 }
 .feed-scroll::-webkit-scrollbar-thumb,
-.overflow-y-auto::-webkit-scrollbar-thumb {
-    background: #1e2d4a;
+.overflow-y-auto::-webkit-scrollbar-thumb,
+#main-content::-webkit-scrollbar-thumb {
+    background: #2A2A36;
     border-radius: 2px;
 }
 
-/* Feed item slide-in animation */
-.feed-item {
-    animation: slide-in 0.25s ease-out;
+/* ============================================================
+   Sidebar Navigation
+   ============================================================ */
+.sidebar {
+    transition: width 200ms ease, transform 200ms ease;
+}
+
+.nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #9B9690;
+    text-decoration: none;
+    transition: background 150ms ease, color 150ms ease;
+    border-left: 2px solid transparent;
+    position: relative;
+}
+.nav-item:hover {
+    background: #24242E;
+    color: #E8E4DE;
+}
+.nav-item.active {
+    background: #1C1C24;
+    color: #E5A84B;
+    border-left-color: #E5A84B;
+}
+.nav-badge {
+    margin-left: auto;
+    background: #E5A84B;
+    color: #0C0C0F;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 9px;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+/* ============================================================
+   Toggle Switch (Auto-reply)
+   ============================================================ */
+.toggle-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px;
+    border-radius: 12px;
+    cursor: pointer;
+    border: none;
+    transition: background 200ms ease;
+    width: 60px;
+    height: 24px;
+    position: relative;
+    background: #2A2A36;
+}
+.toggle-btn.on {
+    background: #A07832;
+}
+.toggle-thumb {
+    display: block;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #E8E4DE;
+    transition: transform 200ms ease;
+    position: absolute;
+    left: 3px;
+}
+.toggle-btn.on .toggle-thumb {
+    transform: translateX(36px);
+}
+.toggle-label {
+    font-size: 10px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    position: absolute;
+    left: 8px;
+    color: #5C5853;
+}
+.toggle-btn.on .toggle-label {
+    color: #E8E4DE;
+}
+
+/* ============================================================
+   Animations
+   ============================================================ */
+
+/* Feed / activity card entrance */
+.feed-item,
+.activity-card {
+    animation: slide-in 200ms ease-out;
 }
 @keyframes slide-in {
-    from {
-        opacity: 0;
-        transform: translateY(-6px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 
 /* Draft card entrance */
 .draft-card {
-    animation: fade-in 0.2s ease-out;
+    animation: fade-in 200ms ease-out;
 }
 @keyframes fade-in {
     from { opacity: 0; }
     to   { opacity: 1; }
 }
 
+/* Page content transition */
+.page-enter {
+    animation: page-in 150ms ease-out;
+}
+@keyframes page-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Chat bubble entrance */
+.chat-bubble {
+    animation: bubble-in 200ms ease-out;
+}
+@keyframes bubble-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Typing indicator dots */
+.typing-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #E5A84B;
+    animation: dot-bounce 1.4s infinite ease-in-out;
+}
+.typing-dot:nth-child(1) { animation-delay: 0s; }
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes dot-bounce {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+    40% { transform: scale(1); opacity: 1; }
+}
+
 /* Status dot */
 .status-dot {
     display: inline-block;
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     flex-shrink: 0;
 }
-.status-dot.ok    { background-color: #4ade80; }
-.status-dot.warn  { background-color: #facc15; }
-.status-dot.error { background-color: #f87171; }
+.status-dot.ok    { background-color: #4ADE80; }
+.status-dot.warn  { background-color: #E5A84B; }
+.status-dot.error { background-color: #F87171; }
 
-/* Pulse animation for live indicator */
+/* Pulse for live indicator */
 .status-dot.pulse {
     animation: dot-pulse 2s infinite;
 }
 @keyframes dot-pulse {
-    0%, 100% { opacity: 1;   transform: scale(1);    }
-    50%       { opacity: 0.5; transform: scale(1.3); }
+    0%, 100% { opacity: 1;   transform: scale(1); }
+    50%      { opacity: 0.5; transform: scale(1.4); }
 }
 
-/* HTMX loading indicator hidden by default */
+/* Skeleton shimmer loading */
+.skeleton {
+    background: linear-gradient(90deg, #1C1C24 25%, #24242E 50%, #1C1C24 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 4px;
+}
+@keyframes shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* HTMX loading indicator */
 .htmx-indicator {
     display: none;
 }
 .htmx-request .htmx-indicator,
 .htmx-request.htmx-indicator {
     display: inline;
+}
+
+/* ============================================================
+   Card hover glow
+   ============================================================ */
+.card-hover:hover {
+    box-shadow: 0 0 0 1px #3D3D4A;
+}
+
+/* ============================================================
+   Stat card tabular numbers
+   ============================================================ */
+.stat-number {
+    font-variant-numeric: tabular-nums;
+    transition: color 300ms ease;
+}
+
+/* ============================================================
+   Source color classes (activity feed)
+   ============================================================ */
+.source-chat       { color: #E5A84B; }
+.source-jira       { color: #60A5FA; }
+.source-gitlab     { color: #FB923C; }
+.source-confluence { color: #67E8F9; }
+.source-agent      { color: #C084FC; }
+.source-system     { color: #5C5853; }
+
+/* ============================================================
+   Filter pills (activity, memory)
+   ============================================================ */
+.filter-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 12px;
+    border-radius: 16px;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid #2A2A36;
+    background: transparent;
+    color: #9B9690;
+    cursor: pointer;
+    transition: all 150ms ease;
+}
+.filter-pill:hover { border-color: #3D3D4A; color: #E8E4DE; }
+.filter-pill.active { background: #24242E; border-color: #3D3D4A; color: #E8E4DE; }
+
+/* Drop zone active state */
+#drop-zone.drag-over { border-color: #E5A84B; background: rgba(229, 168, 75, 0.05); }
+
+/* ============================================================
+   Responsive: tablet (collapsed sidebar)
+   ============================================================ */
+@media (max-width: 1023px) and (min-width: 768px) {
+    .sidebar {
+        width: 56px;
+    }
+    .sidebar .nav-item span,
+    .sidebar .nav-badge,
+    .sidebar .toggle-label {
+        display: none;
+    }
+    .sidebar .nav-item {
+        justify-content: center;
+        padding: 10px;
+        border-left: none;
+    }
+    .sidebar .nav-item.active {
+        border-left: none;
+        border-bottom: 2px solid #E5A84B;
+    }
+    #sidebar > div:first-child span:last-child {
+        display: none;
+    }
+}
+
+/* Responsive: mobile (hidden sidebar) */
+@media (max-width: 767px) {
+    .sidebar {
+        position: fixed;
+        z-index: 50;
+        transform: translateX(-100%);
+    }
+    .sidebar.sidebar-open {
+        transform: translateX(0);
+    }
+}
+
+/* ============================================================
+   Reduced motion
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }
 }

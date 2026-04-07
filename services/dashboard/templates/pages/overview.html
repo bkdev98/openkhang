@@ -1,0 +1,81 @@
+<div class="page-enter flex flex-col gap-6">
+
+    <!-- Page header -->
+    <div class="flex items-center justify-between">
+        <h1 class="font-mono font-semibold text-lg text-ok-text">Overview</h1>
+        <div class="flex items-center gap-2">
+            <span class="status-dot ok pulse"></span>
+            <span class="text-xs text-ok-ghost">live</span>
+        </div>
+    </div>
+
+    <!-- Stat cards -->
+    <div id="stats-grid"
+         hx-get="/api/stats"
+         hx-trigger="load, every 10s"
+         hx-swap="innerHTML"
+         class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="skeleton h-24 rounded-lg"></div>
+        <div class="skeleton h-24 rounded-lg"></div>
+        <div class="skeleton h-24 rounded-lg"></div>
+        <div class="skeleton h-24 rounded-lg"></div>
+    </div>
+
+    <!-- Two-column: Recent Drafts + Live Activity -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+        <!-- Recent Drafts -->
+        <div class="flex flex-col gap-3">
+            <div class="flex items-center justify-between">
+                <h2 class="font-mono text-sm font-medium text-ok-text">Recent Drafts</h2>
+                <a href="/pages/drafts"
+                   hx-get="/pages/drafts"
+                   hx-target="#main-content"
+                   hx-swap="innerHTML transition:true"
+                   hx-push-url="/pages/drafts"
+                   class="text-xs text-ok-amber hover:text-ok-text transition-colors">
+                    View all →
+                </a>
+            </div>
+            <div id="overview-drafts"
+                 hx-get="/api/drafts?limit=3&compact=1"
+                 hx-trigger="load, every 10s"
+                 hx-swap="innerHTML"
+                 class="flex flex-col gap-2">
+                <div class="skeleton h-20 rounded-lg"></div>
+                <div class="skeleton h-20 rounded-lg"></div>
+            </div>
+        </div>
+
+        <!-- Live Activity (server returns pre-rendered HTML cards via SSE) -->
+        <div class="flex flex-col gap-3">
+            <div class="flex items-center justify-between">
+                <h2 class="font-mono text-sm font-medium text-ok-text">Live Activity</h2>
+                <a href="/pages/activity"
+                   hx-get="/pages/activity"
+                   hx-target="#main-content"
+                   hx-swap="innerHTML transition:true"
+                   hx-push-url="/pages/activity"
+                   class="text-xs text-ok-amber hover:text-ok-text transition-colors">
+                    View all →
+                </a>
+            </div>
+            <div id="overview-feed"
+                 class="flex flex-col gap-1 max-h-96 overflow-y-auto feed-scroll"
+                 hx-ext="sse"
+                 sse-connect="/api/feed?compact=1"
+                 sse-swap="message"
+                 hx-swap="afterbegin">
+                <p class="text-ok-ghost text-xs text-center py-8">Connecting to live feed...</p>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<!-- Re-init Lucide icons when new SSE cards arrive -->
+<script>
+document.body.addEventListener('htmx:sseMessage', function() {
+    setTimeout(function() { lucide.createIcons(); }, 50);
+});
+</script>

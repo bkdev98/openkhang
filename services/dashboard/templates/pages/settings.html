@@ -1,0 +1,104 @@
+<div class="page-enter flex flex-col gap-6 max-w-2xl">
+
+    <!-- Page header -->
+    <h1 class="font-mono font-semibold text-lg text-ok-text">Settings</h1>
+
+    <!-- Persona -->
+    <section class="flex flex-col gap-3">
+        <h2 class="font-mono text-sm font-medium text-ok-text border-b border-ok-border pb-2">Persona</h2>
+        <form hx-post="/api/settings/persona" hx-target="#persona-result" hx-swap="innerHTML"
+              class="flex flex-col gap-3">
+            <div id="persona-fields"
+                 hx-get="/api/settings/persona"
+                 hx-trigger="load"
+                 hx-swap="innerHTML"
+                 class="flex flex-col gap-3">
+                <div class="skeleton h-10 rounded-lg"></div>
+                <div class="skeleton h-10 rounded-lg"></div>
+            </div>
+            <div class="flex items-center gap-3">
+                <button type="submit"
+                        class="bg-ok-amber hover:bg-ok-ambdim text-ok-void text-xs font-medium px-4 py-2 rounded-lg transition-colors">
+                    Save Persona
+                </button>
+                <span id="persona-result" class="text-xs"></span>
+            </div>
+        </form>
+    </section>
+
+    <!-- Confidence -->
+    <section class="flex flex-col gap-3">
+        <h2 class="font-mono text-sm font-medium text-ok-text border-b border-ok-border pb-2">Confidence Thresholds</h2>
+        <form hx-post="/api/settings/confidence" hx-target="#confidence-result" hx-swap="innerHTML"
+              class="flex flex-col gap-3">
+            <div id="confidence-fields"
+                 hx-get="/api/settings/confidence"
+                 hx-trigger="load"
+                 hx-swap="innerHTML"
+                 class="flex flex-col gap-3">
+                <div class="skeleton h-10 rounded-lg"></div>
+            </div>
+            <div class="flex items-center gap-3">
+                <button type="submit"
+                        class="bg-ok-amber hover:bg-ok-ambdim text-ok-void text-xs font-medium px-4 py-2 rounded-lg transition-colors">
+                    Save Thresholds
+                </button>
+                <span id="confidence-result" class="text-xs"></span>
+            </div>
+        </form>
+    </section>
+
+    <!-- Projects -->
+    <section class="flex flex-col gap-3">
+        <h2 class="font-mono text-sm font-medium text-ok-text border-b border-ok-border pb-2">Projects</h2>
+        <div id="projects-list"
+             hx-get="/api/settings/projects"
+             hx-trigger="load"
+             hx-swap="innerHTML"
+             class="flex flex-col gap-2">
+            <div class="skeleton h-16 rounded-lg"></div>
+        </div>
+    </section>
+
+    <!-- Integrations -->
+    <section class="flex flex-col gap-3">
+        <h2 class="font-mono text-sm font-medium text-ok-text border-b border-ok-border pb-2">Integrations</h2>
+        <form hx-post="/api/settings/integrations" hx-target="#integrations-result" hx-swap="innerHTML"
+              class="flex flex-col gap-3">
+            <div id="integrations-fields"
+                 hx-get="/api/settings/integrations"
+                 hx-trigger="load"
+                 hx-swap="innerHTML"
+                 class="flex flex-col gap-3">
+                <div class="skeleton h-10 rounded-lg"></div>
+            </div>
+            <div class="flex items-center gap-3">
+                <button type="submit"
+                        class="bg-ok-amber hover:bg-ok-ambdim text-ok-void text-xs font-medium px-4 py-2 rounded-lg transition-colors">
+                    Save Integrations
+                </button>
+                <span id="integrations-result" class="text-xs"></span>
+            </div>
+        </form>
+    </section>
+
+    <!-- Auto-reply (prominent) -->
+    <section class="flex flex-col gap-3">
+        <h2 class="font-mono text-sm font-medium text-ok-text border-b border-ok-border pb-2">Auto-Reply</h2>
+        <div class="bg-ok-srf border border-ok-border rounded-lg p-4 flex items-center justify-between">
+            <div>
+                <p class="text-sm text-ok-text">Automatic reply mode</p>
+                <p class="text-xs text-ok-muted mt-1">When enabled, high-confidence replies are sent automatically without review</p>
+            </div>
+            <button id="settings-autoreply"
+                    hx-post="/api/autoreply/toggle"
+                    hx-target="#settings-autoreply"
+                    hx-swap="outerHTML"
+                    class="toggle-btn on">
+                <span class="toggle-thumb"></span>
+                <span class="toggle-label">ON</span>
+            </button>
+        </div>
+    </section>
+
+</div>

@@ -1,0 +1,88 @@
+<div class="page-enter flex flex-col gap-4">
+
+    <!-- Page header -->
+    <h1 class="font-mono font-semibold text-lg text-ok-text">Drafts</h1>
+
+    <!-- Tabs -->
+    <div class="flex items-center gap-1 border-b border-ok-border">
+        <button class="draft-tab active" data-status="pending"
+                hx-get="/api/drafts?status=pending"
+                hx-target="#drafts-list"
+                hx-swap="innerHTML"
+                onclick="switchDraftTab(this)">
+            Pending
+        </button>
+        <button class="draft-tab" data-status="approved"
+                hx-get="/api/drafts?status=approved"
+                hx-target="#drafts-list"
+                hx-swap="innerHTML"
+                onclick="switchDraftTab(this)">
+            Approved
+        </button>
+        <button class="draft-tab" data-status="rejected"
+                hx-get="/api/drafts?status=rejected"
+                hx-target="#drafts-list"
+                hx-swap="innerHTML"
+                onclick="switchDraftTab(this)">
+            Rejected
+        </button>
+    </div>
+
+    <!-- Search -->
+    <div class="relative">
+        <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-ok-ghost"></i>
+        <input type="text" id="draft-search" placeholder="Search drafts..."
+               hx-get="/api/drafts"
+               hx-trigger="keyup changed delay:300ms"
+               hx-target="#drafts-list"
+               hx-swap="innerHTML"
+               hx-include="[name='status']"
+               name="search"
+               class="w-full bg-ok-srf border border-ok-border rounded-lg pl-10 pr-4 py-2.5 text-sm text-ok-text
+                      placeholder-ok-ghost focus:outline-none focus:border-ok-amber">
+        <input type="hidden" name="status" value="pending" id="draft-status-input">
+    </div>
+
+    <!-- Draft list -->
+    <div id="drafts-list"
+         hx-get="/api/drafts?status=pending"
+         hx-trigger="load, every 10s"
+         hx-swap="innerHTML"
+         class="flex flex-col gap-3">
+        <div class="skeleton h-24 rounded-lg"></div>
+        <div class="skeleton h-24 rounded-lg"></div>
+    </div>
+</div>
+
+<style>
+.draft-tab {
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #9B9690;
+    border-bottom: 2px solid transparent;
+    transition: all 150ms ease;
+    cursor: pointer;
+    background: none;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+}
+.draft-tab:hover { color: #E8E4DE; }
+.draft-tab.active { color: #E5A84B; border-bottom-color: #E5A84B; }
+</style>
+
+<script>
+function switchDraftTab(btn) {
+    document.querySelectorAll('.draft-tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('draft-status-input').value = btn.dataset.status;
+    // Stop auto-refresh for non-pending tabs
+    var list = document.getElementById('drafts-list');
+    if (btn.dataset.status === 'pending') {
+        list.setAttribute('hx-trigger', 'every 10s');
+    } else {
+        list.removeAttribute('hx-trigger');
+    }
+}
+</script>
