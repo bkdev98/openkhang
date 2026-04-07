@@ -9,7 +9,6 @@ Behavior must be IDENTICAL to the original inline pipeline path.
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any
 
 from ..skill_registry import BaseSkill, SkillContext
@@ -151,9 +150,8 @@ class OutwardReplySkill(BaseSkill):
 
     @staticmethod
     def _is_mentioned(body: str) -> bool:
-        from ..matrix_channel_adapter import _get_mention_patterns
-        text = body.lower()
-        return any(re.search(p, text) for p in _get_mention_patterns())
+        from ..mention_detector import detect_mention
+        return detect_mention(body)
 
     @staticmethod
     def _is_group_chat(event: dict) -> bool:

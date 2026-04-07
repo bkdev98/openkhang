@@ -90,19 +90,18 @@ class PromptBuilder:
         style_examples: Optional[list[dict]],
         room_messages: Optional[list[dict]] = None,
     ) -> str:
-        template = self._load_outward_template()
-        persona_block = self._format_persona()
+        template = self._render_template(self._load_outward_template())
 
         context_block = self._format_memories(memories, label="Relevant context")
         sender_block = self._format_memories(sender_context, label="About this person")
         style_block = self._format_style_examples(style_examples)
         room_block = self._format_room_messages(room_messages)
+        addressing_block = self._format_addressing_patterns()
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-        parts = [template]
-        if persona_block:
-            parts.append(persona_block)
-        parts.append(f"\n## Current time\n{now}")
+        parts = [template, f"\n## Current time\n{now}"]
+        if addressing_block:
+            parts.append(addressing_block)
         if style_block:
             parts.append(style_block)
         if room_block:
@@ -119,7 +118,7 @@ class PromptBuilder:
         memories: list[dict],
         sender_context: list[dict],
     ) -> str:
-        template = self._load_inward_template()
+        template = self._render_template(self._load_inward_template())
 
         context_block = self._format_memories(memories, label="Work context")
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -194,63 +193,78 @@ class PromptBuilder:
         lines.append("</conversation>")
         return "\n".join(lines)
 
-    def _format_persona(self) -> str:
-        """Load persona.yaml and format as identity override block."""
+    def _render_template(self, template: str) -> str:
+        """Replace {placeholders} in a prompt template with persona.yaml values.
+
+        Handles scalar fields ({name}, {role}) and block fields
+        ({never_do_block}, {uncertainty_block}, {address_rules_block}).
+        """
         persona = self._load_persona()
-        if not persona:
+        style = persona.get("style", {})
+        address = persona.get("address_rules", {})
+
+        # Scalar replacements
+        replacements = {
+            "{name}": persona.get("name", "User"),
+            "{role}": persona.get("role", "Engineer"),
+            "{company}": persona.get("company", ""),
+            "{team}": persona.get("team", ""),
+            "{languages}": ", ".join(persona.get("languages", ["English"])),
+            "{formality}": style.get("formality", "professional"),
+            "{emoji_usage}": style.get("emoji_usage", "minimal"),
+            "{response_length}": style.get("response_length", "concise"),
+        }
+
+        # Block: never_do + identity_facts
+        never_lines = []
+        for rule in persona.get("never_do", []):
+            never_lines.append(f"- NEVER {rule}")
+        for fact in persona.get("identity_facts", []):
+            never_lines.append(f"- Context: {fact}")
+        replacements["{never_do_block}"] = "\n".join(never_lines) if never_lines else "- Follow standard professional guidelines"
+
+        # Block: uncertainty phrases
+        uncertainty_lines = []
+        for lang, phrases in persona.get("uncertainty_phrases", {}).items():
+            for p in phrases:
+                uncertainty_lines.append(f"- ({lang}) \"{p}\"")
+        replacements["{uncertainty_block}"] = "\n".join(uncertainty_lines) if uncertainty_lines else '- "Let me check and get back to you"'
+
+        # Block: address rules (Vietnamese xưng hô)
+        addr_lines = []
+        if address:
+            addr_lines.append(f"- Default: call others \"{address.get('default_other', 'anh/chị')}\" when unsure of seniority")
+            addr_lines.append(f"- Refer to yourself as \"{address.get('default_self', 'mình')}\"")
+            addr_lines.append("- Adjust based on sender context:")
+            addr_lines.append("  - Junior → call \"em\", self \"anh\"")
+            addr_lines.append("  - Same level → name or \"bạn\", self \"mình\"")
+            addr_lines.append("  - Senior/manager → \"anh/chị\", self \"em\"")
+            if address.get("never_assume_tu"):
+                addr_lines.append("- NEVER use \"tao/mày\" or overly casual forms")
+        replacements["{address_rules_block}"] = "\n".join(addr_lines) if addr_lines else "- Use polite, professional address forms"
+
+        result = template
+        for placeholder, value in replacements.items():
+            result = result.replace(placeholder, value)
+        return result
+
+    def _format_addressing_patterns(self) -> str:
+        """Format known addressing patterns from real conversations."""
+        addr_patterns = self._load_addressing_patterns()
+        if not addr_patterns:
             return ""
 
-        lines = ["## Identity (from persona.yaml — overrides defaults above)"]
-        lines.append(f"- Name: {persona.get('name', 'Unknown')}")
-        lines.append(f"- Role: {persona.get('role', 'Engineer')}")
-        lines.append(f"- Company: {persona.get('company', '')}")
-        lines.append(f"- Team: {persona.get('team', '')}")
-
-        facts = persona.get("identity_facts", [])
-        if facts:
-            lines.append("\n### Key facts about you")
-            for fact in facts:
-                lines.append(f"- {fact}")
-
-        never = persona.get("never_do", [])
-        if never:
-            lines.append("\n### NEVER do these (hard rules)")
-            for rule in never:
-                lines.append(f"- {rule}")
-
-        address = persona.get("address_rules", {})
-        if address:
-            lines.append("\n### Vietnamese form of address (xưng hô) — CRITICAL")
-            lines.append(f"- Default: call others \"{address.get('default_other', 'anh/chị')}\" when you have no history about their seniority")
-            lines.append(f"- Refer to yourself as \"{address.get('default_self', 'mình')}\"")
-            lines.append("- If 'About this person' context below reveals seniority, adjust accordingly:")
-            lines.append("  - Junior colleague → call them \"em\", refer to self as \"anh\"")
-            lines.append("  - Same level → call them by name or \"bạn\", refer to self as \"mình\"")
-            lines.append("  - Senior/manager → call them \"anh/chị\", refer to self as \"em\"")
-            if address.get("never_assume_tu"):
-                lines.append("- NEVER use \"tao/mày\" or overly casual forms")
-            # Inject known addressing patterns from real conversations
-            addr_patterns = self._load_addressing_patterns()
-            if addr_patterns:
-                lines.append("\n### Known addressing (from your real messages)")
-                for person, terms in addr_patterns.items():
-                    if person == "_default_tone":
-                        continue
-                    unique = list(set(terms))
-                    lines.append(f"- {person}: you call them \"{'/'.join(unique)}\"")
-                if "_default_tone" in addr_patterns:
-                    from collections import Counter
-                    tone = Counter(addr_patterns["_default_tone"])
-                    top = tone.most_common(3)
-                    lines.append(f"- Your default tone: {', '.join(f'{t} ({n}x)' for t, n in top)}")
-
-        phrases = persona.get("uncertainty_phrases", {})
-        if phrases:
-            lines.append("\n### When uncertain, use one of these:")
-            for lang, plist in phrases.items():
-                for p in plist:
-                    lines.append(f"- ({lang}) \"{p}\"")
-
+        lines = ["## Known addressing (from your real messages)"]
+        for person, terms in addr_patterns.items():
+            if person == "_default_tone":
+                continue
+            unique = list(set(terms))
+            lines.append(f"- {person}: you call them \"{'/'.join(unique)}\"")
+        if "_default_tone" in addr_patterns:
+            from collections import Counter
+            tone = Counter(addr_patterns["_default_tone"])
+            top = tone.most_common(3)
+            lines.append(f"- Your default tone: {', '.join(f'{t} ({n}x)' for t, n in top)}")
         return "\n".join(lines)
 
     def _load_addressing_patterns(self) -> dict:

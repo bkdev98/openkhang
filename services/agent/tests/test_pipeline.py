@@ -140,8 +140,9 @@ class TestOutwardAutoSendPath:
     async def test_high_confidence_triggers_send(self, pipeline, mock_llm, mock_sender):
         mock_llm.generate.return_value = make_llm_response(confidence=0.99)
 
-        # Patch scorer to approve auto-send
-        with patch.object(ConfidenceScorer, "should_auto_send", return_value=True):
+        # Patch scorer to approve auto-send + enable autoreply toggle
+        with patch.object(ConfidenceScorer, "should_auto_send", return_value=True), \
+             patch("services.dashboard.agent_relay.is_autoreply_enabled", return_value=True):
             result = await pipeline.process_event({
                 "source": "matrix",
                 "body": "Thanks for the update!",
@@ -158,7 +159,8 @@ class TestOutwardAutoSendPath:
         mock_llm.generate.return_value = make_llm_response(confidence=0.99)
         mock_sender.send.side_effect = RuntimeError("Rate limit exceeded")
 
-        with patch.object(ConfidenceScorer, "should_auto_send", return_value=True):
+        with patch.object(ConfidenceScorer, "should_auto_send", return_value=True), \
+             patch("services.dashboard.agent_relay.is_autoreply_enabled", return_value=True):
             result = await pipeline.process_event({
                 "source": "matrix",
                 "body": "ok noted",
