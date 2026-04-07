@@ -1,18 +1,18 @@
-<div id="stats-grid" class="grid grid-cols-4 gap-3">
-    <div class="bg-ok-srf border border-ok-border rounded-lg p-4 card-hover overflow-hidden">
-        <p class="stat-number font-mono text-xl font-semibold text-ok-text truncate">{{ stats.get('pending_drafts', 0) }}</p>
-        <p class="text-[11px] text-ok-muted mt-1 truncate">pending drafts</p>
+<div id="stats-grid" class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <div class="bg-ok-srf border border-ok-border rounded-lg px-5 py-4 card-hover">
+        <p class="stat-number font-mono text-2xl font-semibold text-ok-text whitespace-nowrap">{{ stats.get('pending_drafts', 0) }}</p>
+        <p class="text-xs text-ok-muted mt-1">pending drafts</p>
     </div>
-    <div class="bg-ok-srf border border-ok-border rounded-lg p-4 card-hover overflow-hidden">
-        <p class="stat-number font-mono text-xl font-semibold text-ok-amber truncate">{{ stats.get('events_today', 0) }}</p>
-        <p class="text-[11px] text-ok-muted mt-1 truncate">events today</p>
+    <div class="bg-ok-srf border border-ok-border rounded-lg px-5 py-4 card-hover">
+        <p class="stat-number font-mono text-2xl font-semibold text-ok-amber whitespace-nowrap">{{ stats.get('events_today', 0) }}</p>
+        <p class="text-xs text-ok-muted mt-1">events today</p>
     </div>
-    <div class="bg-ok-srf border border-ok-border rounded-lg p-4 card-hover overflow-hidden">
-        <p class="stat-number font-mono text-xl font-semibold text-ok-green truncate">{{ stats.get('approved_today', 0) }}</p>
-        <p class="text-[11px] text-ok-muted mt-1 truncate">approved today</p>
+    <div class="bg-ok-srf border border-ok-border rounded-lg px-5 py-4 card-hover">
+        <p class="stat-number font-mono text-2xl font-semibold text-ok-green whitespace-nowrap">{{ stats.get('approved_today', 0) }}</p>
+        <p class="text-xs text-ok-muted mt-1">approved today</p>
     </div>
-    <div class="bg-ok-srf border border-ok-border rounded-lg p-4 card-hover overflow-hidden">
-        <p class="stat-number font-mono text-xl font-semibold text-ok-muted truncate">{{ stats.get('total_events', 0) }}</p>
-        <p class="text-[11px] text-ok-muted mt-1 truncate">total events</p>
+    <div class="bg-ok-srf border border-ok-border rounded-lg px-5 py-4 card-hover">
+        <p class="stat-number font-mono text-2xl font-semibold text-ok-muted whitespace-nowrap">{{ stats.get('total_events', 0) }}</p>
+        <p class="text-xs text-ok-muted mt-1">total events</p>
     </div>
 </div>
