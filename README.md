@@ -142,7 +142,15 @@ openkhang/
 ├── services/
 │   ├── memory/        # Mem0 + pgvector + episodic store
 │   ├── ingestion/     # Chat, Jira, GitLab, Confluence, Code ingestors
-│   ├── agent/         # Dual-mode pipeline, LLM client, confidence scorer
+│   ├── agent/         # 4-layer agentic architecture
+│   │   ├── tools/     # 7 tool wrappers (search, send, lookup, etc)
+│   │   ├── skills/    # 3 skill implementations (outward, inward, send-as-khanh)
+│   │   ├── channel_adapter*.py   # Channel normalization (Matrix, Dashboard, Telegram)
+│   │   ├── response_router.py    # Response routing by channel
+│   │   ├── tool_registry.py      # Tool discovery + execution
+│   │   ├── skill_registry.py     # Skill matching + delegation
+│   │   ├── tool_calling_loop.py  # ReAct loop for Claude tool_use
+│   │   └── pipeline.py           # Main orchestrator
 │   ├── workflow/      # YAML state machine engine + audit log
 │   └── dashboard/     # FastAPI + HTMX + SSE (inbox/agent relay)
 ├── config/

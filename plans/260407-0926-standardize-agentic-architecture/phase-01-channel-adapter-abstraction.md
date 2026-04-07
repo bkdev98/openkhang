@@ -8,7 +8,7 @@
 ## Overview
 - **Priority:** P1
 - **Effort:** 1 day
-- **Status:** Pending
+- **Status:** Done
 - **Blockers:** None (parallel-safe with Phase 2)
 
 Replace raw event dicts flowing through the system with a typed `CanonicalMessage` dataclass. Create an abstract `ChannelAdapter` interface and concrete adapters for Matrix (outward) and Dashboard (inward). Add a `ResponseRouter` that dispatches `AgentResult` to the correct adapter.
@@ -134,17 +134,17 @@ class CanonicalMessage:
 
 ## Todo Checklist
 
-- [ ] Create `CanonicalMessage` dataclass + `ChannelAdapter` ABC
-- [ ] Create `MatrixChannelAdapter` (normalize + send)
-- [ ] Create `DashboardChannelAdapter` (normalize + return)
-- [ ] Create `TelegramChannelAdapter` stub
-- [ ] Create `ResponseRouter` dispatcher
-- [ ] Update `pipeline.py` to accept CanonicalMessage (with dict shim)
-- [ ] Update `agent_relay.py` to use MatrixChannelAdapter
-- [ ] Update `twin_chat.py` to use DashboardChannelAdapter
-- [ ] All 78 tests pass
-- [ ] Manual smoke test: dashboard inward chat works
-- [ ] Manual smoke test: outward pipeline (if Matrix bridge available)
+- [x] Create `CanonicalMessage` dataclass + `ChannelAdapter` ABC
+- [x] Create `MatrixChannelAdapter` (normalize + send)
+- [x] Create `DashboardChannelAdapter` (normalize + return)
+- [x] Create `TelegramChannelAdapter` stub
+- [x] Create `ResponseRouter` dispatcher
+- [x] Update `pipeline.py` to accept CanonicalMessage (with dict shim)
+- [x] Update `agent_relay.py` to use MatrixChannelAdapter
+- [x] Update `twin_chat.py` to use DashboardChannelAdapter
+- [x] All 78 tests pass
+- [x] Manual smoke test: dashboard inward chat works
+- [x] Manual smoke test: outward pipeline (if Matrix bridge available)
 
 ## Success Criteria
 - All 78 tests pass

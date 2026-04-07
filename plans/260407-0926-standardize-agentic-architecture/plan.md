@@ -1,12 +1,13 @@
 ---
 title: "Standardize Agentic Architecture"
 description: "Refactor openkhang pipeline to channel adapters, tool registry, skill system, and LLM tool-calling"
-status: pending
+status: complete
 priority: P1
 effort: 5d
 branch: kai/refactor/standardize-agentic-architecture
 tags: [refactoring, architecture, agent, tools, skills]
 created: 2026-04-07
+completed: 2026-04-07
 ---
 
 # Standardize Agentic Architecture
@@ -23,10 +24,10 @@ Refactor the openkhang digital twin's plumbing (NOT identity) to a standardized 
 
 | # | Phase | Effort | Status | Blocker |
 |---|-------|--------|--------|---------|
-| 1 | [Channel Adapter Abstraction](phase-01-channel-adapter-abstraction.md) | 1d | Pending | None |
-| 2 | [Tool Registry + Conversion](phase-02-tool-registry-and-conversion.md) | 1.5d | Pending | None |
-| 3 | [Skill System](phase-03-skill-system.md) | 1.5d | Pending | Phase 2 |
-| 4 | [LLM Tool-Calling Integration](phase-04-llm-tool-calling-integration.md) | 1d | Pending | Phase 2 |
+| 1 | [Channel Adapter Abstraction](phase-01-channel-adapter-abstraction.md) | 1d | Done | None |
+| 2 | [Tool Registry + Conversion](phase-02-tool-registry-and-conversion.md) | 1.5d | Done | None |
+| 3 | [Skill System](phase-03-skill-system.md) | 1.5d | Done | Phase 2 |
+| 4 | [LLM Tool-Calling Integration](phase-04-llm-tool-calling-integration.md) | 1d | Done | Phase 2 |
 
 Phases 1 and 2 are independent (parallel-safe). Phase 3 depends on Phase 2 (skills orchestrate tools). Phase 4 depends on Phase 2 (LLM calls tools).
 

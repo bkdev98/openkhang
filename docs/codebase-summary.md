@@ -1,8 +1,8 @@
 # Codebase Summary: openkhang
 
-**Last Updated:** April 6, 2025  
-**Total Files:** 118  
-**Total Tokens:** 154,558  
+**Last Updated:** April 7, 2026  
+**Total Files:** 135+  
+**Total Tokens:** ~180,000  
 **Main Language:** Python 3.13
 
 ## Directory Structure Overview
@@ -179,46 +179,48 @@ All ingestors call `MemoryClient.add_memory()` after chunking.
 
 ### 3. Agent Pipeline & Skill System (`services/agent/`)
 
-**Purpose:** Skills + tools → message processing → response routing
+**Purpose:** 4-layer agentic architecture: channels → tools → skills → responses
 
-**Files (35 total, ~4500 LOC):**
+**Files (45 total, ~6200 LOC):**
 
-**Core Orchestration:**
-- `pipeline.py` (420 LOC) — Main orchestrator; dispatch to skills
+**Core Orchestration (6 files, ~1200 LOC):**
+- `pipeline.py` (264 LOC) — Main orchestrator; matches skills via registry
 - `classifier.py` (165 LOC) — `MessageClassifier`, 6-class classification
-- `confidence.py` (255 LOC) — `ConfidenceScorer`, scoring + modifiers
-- `prompt_builder.py` (280 LOC) — `PromptBuilder`, RAG-aware prompt building
+- `confidence.py` (255 LOC) — `ConfidenceScorer`, base + room/sender/history modifiers
+- `prompt_builder.py` (280 LOC) — `PromptBuilder`, system + RAG context + user
 - `llm_client.py` (300 LOC) — `LLMClient`, multi-provider (Meridian > Claude API)
-- `draft_queue.py` (225 LOC) — `DraftQueue`, manage pending/approved/edited drafts
+- `draft_queue.py` (225 LOC) — `DraftQueue`, pending → approved → sent workflow
 
-**Agentic Architecture:**
+**Layer 1: Channel Adapters (6 files, ~569 LOC):**
 - `channel_adapter.py` (115 LOC) — `ChannelAdapter` ABC, `CanonicalMessage` dataclass
-- `matrix_channel_adapter.py` (180 LOC) — Matrix (Google Chat) adapter
-- `dashboard_channel_adapter.py` (85 LOC) — Dashboard adapter (twin chat)
-- `telegram_channel_adapter.py` (25 LOC) — Telegram adapter
+- `matrix_channel_adapter.py` (166 LOC) — Matrix (Google Chat) bridge adapter
+- `mention_detector.py` (79 LOC) — Mention detection: `strip_diacritics()`, `get_mention_patterns()`, `detect_mention()`
+- `dashboard_channel_adapter.py` (85 LOC) — Web dashboard (twin chat) adapter
+- `telegram_channel_adapter.py` (25 LOC) — Telegram adapter stub
 - `response_router.py` (85 LOC) — `ResponseRouter`, dispatch by channel
 
-**Tool System:**
-- `tool_registry.py` (85 LOC) — `BaseTool` ABC, `ToolRegistry`
-- `tools/` (7 files, ~800 LOC total):
-  * `search_knowledge_tool.py` — Query semantic memory
-  * `search_code_tool.py` — Search code repositories
-  * `create_draft_tool.py` — Create draft reply
-  * `send_message_tool.py` — Send message to channel
-  * `lookup_person_tool.py` — Find person context
-  * `get_sender_context_tool.py` — Get sender role/history
-  * `get_room_history_tool.py` — Fetch room message history
+**Layer 2: Tool Registry & Tools (9 files, ~900 LOC):**
+- `tool_registry.py` (85 LOC) — `BaseTool` ABC, `ToolRegistry` with execution
+- `tools/` directory (8 files, ~800 LOC total):
+  * `search_knowledge_tool.py` (50 LOC) — Query semantic memory
+  * `search_code_tool.py` (85 LOC) — Search code repositories (extract terms)
+  * `get_sender_context_tool.py` (40 LOC) — Sender role/history context
+  * `get_room_history_tool.py` (40 LOC) — Room message history
+  * `send_message_tool.py` (50 LOC) — Send message to channel
+  * `lookup_person_tool.py` (40 LOC) — Find person by name
+  * `create_draft_tool.py` (60 LOC) — Create draft reply
+  * `__init__.py` (15 LOC) — Tool re-exports
 
-**Skill System:**
+**Layer 3: Skill System (5 files, ~1500 LOC):**
 - `skill_registry.py` (100 LOC) — `BaseSkill` ABC, `SkillRegistry`, deterministic matching
-- `skills/` (4 files, ~1300 LOC total):
-  * `outward_reply_skill.py` (200 LOC) — Draft generation (deterministic, safety-first)
-  * `inward_query_skill.py` (180 LOC) — Claude tool_use for dynamic tool selection
-  * `send_as_khanh_skill.py` (190 LOC) — Execute approved draft send
-  * `skill_helpers.py` — Shared utilities
+- `skills/` directory (4 files, ~1400 LOC total):
+  * `outward_reply_skill.py` (300 LOC) — Deterministic draft generation (safety-first)
+  * `inward_query_skill.py` (280 LOC) — Claude tool_use for dynamic tool selection
+  * `send_as_khanh_skill.py` (200 LOC) — Execute approved draft send action
+  * `skill_helpers.py` (100 LOC) — Shared skill utilities
 
-**Tool-Calling Loop:**
-- `tool_calling_loop.py` (150 LOC) — ReAct loop for Claude tool_use (inward only)
+**Layer 4: Tool-Calling Loop (1 file, ~150 LOC):**
+- `tool_calling_loop.py` (150 LOC) — ReAct loop for Claude tool_use (inward mode only)
 
 **Prompts & Config:**
 - `prompts/outward_system.md` — System prompt for outward mode
