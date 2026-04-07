@@ -229,6 +229,10 @@ class MemoryClient:
         """Check if agent has ever replied in this room (single-row SQL query)."""
         return await self._episodic.has_room_history(room_id)
 
+    async def get_thread_messages(self, thread_event_id: str, limit: int = 30) -> list[dict]:
+        """Fetch messages in a specific thread (chronological order)."""
+        return await self._episodic.get_thread_messages(thread_event_id, limit=limit)
+
     async def get_room_messages(
         self,
         room_id: str,

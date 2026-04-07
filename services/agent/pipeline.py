@@ -183,6 +183,7 @@ class AgentPipeline:
             SearchCodeTool,
             GetSenderContextTool,
             GetRoomHistoryTool,
+            GetThreadMessagesTool,
             SendMessageTool,
             LookupPersonTool,
             CreateDraftTool,
@@ -192,6 +193,7 @@ class AgentPipeline:
         registry.register(SearchCodeTool(self._memory))
         registry.register(GetSenderContextTool(self._memory))
         registry.register(GetRoomHistoryTool(self._memory))
+        registry.register(GetThreadMessagesTool(self._memory))
         registry.register(SendMessageTool(self._sender))
         registry.register(LookupPersonTool())
         registry.register(CreateDraftTool(self._drafts))

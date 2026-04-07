@@ -95,8 +95,16 @@ class OutwardReplySkill(BaseSkill):
             except Exception:
                 pass  # fail-safe: defaults to False → draft
 
+        # Prefer thread-specific context when message is in a thread
+        thread_event_id = event.get("thread_event_id", "")
         room_messages: list[dict] = []
-        if room_id:
+        if thread_event_id:
+            try:
+                room_messages = await self._memory.get_thread_messages(thread_event_id, limit=30)
+            except Exception:
+                pass
+        # Fall back to room-level messages if no thread or thread is empty
+        if not room_messages and room_id:
             try:
                 room_messages = await self._memory.get_room_messages(room_id, limit=30)
             except Exception:
