@@ -15,7 +15,7 @@ _JQL_OPERATORS = ("=", "!=", "~", " AND ", " OR ", " IN ", " ORDER ")
 
 
 class SearchJiraTool(BaseTool):
-    """Thin wrapper around `jira issue list --output json` for real-time ticket search."""
+    """Thin wrapper around `jira issue list --plain` for real-time ticket search."""
 
     @property
     def name(self) -> str:
@@ -60,7 +60,8 @@ class SearchJiraTool(BaseTool):
         args = [
             "issue", "list",
             "--jql", jql,
-            "--output", "json",
+            "--plain", "--no-headers", "--no-truncate",
+            "--columns", "key,summary,status,assignee,priority",
         ]
 
         try:
@@ -84,13 +85,7 @@ class SearchJiraTool(BaseTool):
         if not stdout:
             return []
 
-        try:
-            data = json.loads(stdout)
-            issues = data if isinstance(data, list) else data.get("issues", [data])
-        except json.JSONDecodeError:
-            # Fallback: plain tab-separated output
-            issues = _parse_plain(stdout)
-
+        issues = _parse_plain(stdout)
         return [_format_issue(i) for i in issues[:limit]]
 
 
