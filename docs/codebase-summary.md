@@ -207,16 +207,14 @@ All ingestors call `MemoryClient.add_memory()` after chunking.
 - `telegram_channel_adapter.py` (25 LOC) — Telegram adapter stub
 - `response_router.py` (85 LOC) — `ResponseRouter`, dispatch by channel
 
-**Layer 4: Tool Registry & Tools (9 files, ~900 LOC):**
+**Layer 4: Tool Registry & Tools (18 files, ~1500 LOC):**
 - `tool_registry.py` (85 LOC) — `BaseTool` ABC, `ToolRegistry` with execution
-- `tools/` directory (8 files, ~800 LOC total):
-  * `search_knowledge_tool.py` (50 LOC) — Query semantic memory
-  * `search_code_tool.py` (85 LOC) — Search code repositories (extract terms)
-  * `get_sender_context_tool.py` (40 LOC) — Sender role/history context
-  * `get_room_history_tool.py` (40 LOC) — Room message history
-  * `send_message_tool.py` (50 LOC) — Send message to channel
-  * `lookup_person_tool.py` (40 LOC) — Find person by name
-  * `create_draft_tool.py` (60 LOC) — Create draft reply
+- `tools/` directory (17 files, ~1400 LOC total):
+  * **Knowledge & Search:** search_knowledge_tool.py, search_code_tool.py, search_events_tool.py, search_jira_tool.py, search_gitlab_tool.py
+  * **Draft Management:** list_drafts_tool.py, manage_draft_tool.py (approve/reject/edit with auto-send)
+  * **Context & Interaction:** get_sender_context_tool.py, get_room_history_tool.py, get_thread_messages_tool.py, lookup_person_tool.py, send_message_tool.py, create_draft_tool.py
+  * **External Integration:** web_fetch_tool.py (fetch URLs, strip HTML), web_search_tool.py (DuckDuckGo), shell_exec_tool.py (safe shell, 8-pattern blocklist)
+  * **Persistence:** memory_note_tool.py (persist notes/insights to long-term memory)
   * `__init__.py` (15 LOC) — Tool re-exports
 
 **Layer 5: Unified Agent Loop (1 file, ~200 LOC):**
