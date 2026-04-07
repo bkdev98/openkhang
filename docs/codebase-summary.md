@@ -330,41 +330,76 @@ Every action logged to `audit_log` table with: workflow_id, action_type, tier, p
 
 ### 5. Dashboard (`services/dashboard/`)
 
-**Purpose:** Web UI for draft review, service health, twin chat
+**Purpose:** Web UI for draft review, service health, twin chat, memory management, settings
 
-**Files (11 total, ~2000 LOC):**
-- `app.py` (280 LOC) — FastAPI main app, route definitions
-- `dashboard_services.py` (355 LOC) — High-level service logic
+**Files (18+ total, ~2500 LOC):**
+- `app.py` (280 LOC) — FastAPI main app, 33 routes, page rendering with HTMX support
+- `api_routes.py` (150 LOC) — API endpoint logic (extracted from app.py)
+- `dashboard_services.py` (355 LOC) — High-level service: drafts, hourly stats, events, memory ops
+- `memory_services.py` (120 LOC) — Mem0 search, delete, text/file ingest
+- `settings_services.py` (95 LOC) — YAML read/write for persona, confidence, projects
 - `inbox_relay.py` (95 LOC) — Consolidate mentions/assignments/flags
 - `agent_relay.py` (160 LOC) — Direct agent communication
 - `health_checker.py` (110 LOC) — Probe postgres, redis, embedding API, matrix-listener
-- `twin_chat.py` (75 LOC) — Memory query interface
-- `templates/base.html` (120 LOC) — Base layout, nav, styling
-- `templates/index.html` (110 LOC) — Home: feed, drafts, health
-- `templates/partials/` — HTMX components (6 files, 280 LOC total)
-- `templates/static/style.css` (180 LOC) — TailwindCSS overrides
+- `twin_chat.py` (75 LOC) — Conversation persistence, history retrieval
+- `templates/base.html` (180 LOC) — Sidebar layout, main content shell, HTMX routing
+- `templates/pages/` (6 new files, ~800 LOC total):
+  * `overview.html` — Stats, recent drafts, live activity
+  * `activity.html` — Full activity log with source filters, infinite scroll
+  * `chat.html` — Conversation UI, message bubbles, markdown
+  * `drafts.html` — Tab bar (Pending/Approved/Rejected), search, history
+  * `memory.html` — Memory search, type filters, knowledge drop form
+  * `settings.html` — Persona, confidence, projects, integrations
+- `templates/partials/` (5+ new files, ~400 LOC total):
+  * `sidebar.html` — Nav items with icons, health footer, auto-reply toggle
+  * `stat_card.html` — Stat with sparkline SVG
+  * `activity_card.html` — Event card with source icon, time-ago, expandable details
+  * `chat_bubble.html` — User vs twin message bubbles with confidence/latency
+  * `draft_card.html` — Draft with confidence badge, approve/reject/edit actions
+  * `memory_card.html` — Memory entry with type badge, source, delete button
+- `templates/static/style.css` (280 LOC) — Warm terminal theme, sidebar styles, animations, responsive
 
-**Key Routes:**
+**Key Routes (33 total):**
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/` | Home (feed, draft count, health) |
-| GET | `/drafts` | Draft queue |
-| POST | `/drafts/{id}/approve` | Approve single draft |
-| POST | `/drafts/{id}/reject` | Reject draft |
-| POST | `/drafts/{id}/edit` | Edit and re-send |
-| GET | `/events` (SSE) | Real-time activity feed |
-| POST | `/twin-chat` | Query agent |
+| GET | `/` | Redirect to /pages/overview |
+| GET | `/pages/{name}` | Render page (partial or full) |
+| GET | `/api/stats/hourly` | Hourly event counts for sparklines |
+| GET | `/api/feed` (SSE) | Real-time activity stream |
+| GET | `/api/feed/history` | Paginated events with source filter |
+| GET | `/api/drafts` | List drafts (status/search/pagination) |
+| POST | `/api/drafts/{id}/approve` | Approve draft |
+| POST | `/api/drafts/{id}/reject` | Reject draft |
+| POST | `/api/drafts/{id}/edit` | Edit and re-send |
+| GET | `/api/chat/history` | Conversation history |
+| POST | `/api/chat` | Query agent |
+| POST | `/api/chat/clear` | Clear conversation |
+| GET | `/api/memory/search` | Search memories |
+| DELETE | `/api/memory/{id}` | Delete memory |
+| POST | `/api/memory/ingest` | Ingest text or file |
+| GET | `/api/settings/{section}` | Get settings |
+| POST | `/api/settings/{section}` | Save settings |
+| POST | `/api/settings/test-connection` | Test integration |
 | GET | `/health` | Service health |
-| GET | `/settings` (future) | Configure persona, thresholds |
 
-**Real-Time:**
-Server-Sent Events (SSE) for activity feed updates. Clients subscribe to `/events`; server pushes new events as they occur.
+**New Features:**
+- Sidebar navigation (6 pages)
+- Overview: stats with 24h sparklines, recent drafts, live feed
+- Activity: readable event cards with source icons, infinite scroll
+- Chat: conversation UI with markdown, history, typing indicator
+- Drafts: tabs (Pending/Approved/Rejected), search, historical records
+- Memory: search/delete Mem0 entries, knowledge drop form (text/pdf/md)
+- Settings: persona, confidence thresholds, projects, integrations
+- Real-time: SSE for activity + HTMX for page navigation
 
-**Frontend:**
-- HTMX for dynamic updates (no page reload)
-- TailwindCSS for styling
-- Jinja2 templates with partials for components
+**Frontend Architecture:**
+- HTMX 1.9: page routing without full reloads, auto-scroll, intersect
+- Jinja2: base + 6 pages + 6 partials + 1 sidebar
+- TailwindCSS: warm charcoal palette (ok-void, ok-srf, ok-raised, etc.)
+- Lucide Icons: source icons (chat, jira, gitlab, confluence)
+- marked.js: markdown rendering in chat
+- Vanilla JS: time-ago formatter, auto-scroll, drag-and-drop file upload
 
 ## Database Schema
 
