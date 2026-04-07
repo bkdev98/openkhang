@@ -125,6 +125,10 @@ class SendAsOwnerSkill(BaseSkill):
 
         room = lookup.data
         message = _extract_composed_message(llm_reply) or llm_reply.strip()
+        # Guard: if still duplicated after extraction, log it
+        if message and message.count(message[:20]) > 1 and len(message) > 40:
+            logger.warning("SendAsOwnerSkill: possible duplicated message detected, truncating")
+            message = message[:len(message)//2].strip()
         send = await tools.execute("send_message", room_id=room["room_id"], text=message)
         if send.success:
             logger.info("SendAsOwnerSkill: sent to %s (%s)", room.get("display_name"), room["room_id"])
@@ -134,11 +138,29 @@ class SendAsOwnerSkill(BaseSkill):
 
 
 def _extract_composed_message(llm_reply: str) -> str | None:
-    """Extract the actual message from LLM response (strip preamble/quotes)."""
-    quote_match = re.search(r'["""](.+?)["""]', llm_reply, re.DOTALL)
+    """Extract the actual message from LLM response (strip preamble/quotes).
+
+    Handles: quoted text, "message: ..." prefix, or plain text.
+    Deduplicates if LLM repeated the message (common with short messages).
+    """
+    text = llm_reply.strip()
+
+    # Try quoted extraction first
+    quote_match = re.search(r'["""](.+?)["""]', text, re.DOTALL)
     if quote_match:
         return quote_match.group(1).strip()
-    prefix_match = re.search(r"(?:message|sending|sent|gửi|nhắn):\s*(.+)", llm_reply, re.IGNORECASE | re.DOTALL)
+
+    # Try prefix extraction
+    prefix_match = re.search(r"(?:message|sending|sent|gửi|nhắn):\s*(.+)", text, re.IGNORECASE | re.DOTALL)
     if prefix_match:
-        return prefix_match.group(1).strip()
-    return None
+        text = prefix_match.group(1).strip()
+
+    # Deduplicate: if text is exactly the same message repeated, take one copy
+    if len(text) >= 4:
+        half = len(text) // 2
+        first_half = text[:half].strip()
+        second_half = text[half:].strip()
+        if first_half == second_half:
+            return first_half
+
+    return text if text else None
