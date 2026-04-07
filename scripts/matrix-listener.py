@@ -128,32 +128,47 @@ def matrix_api(method, path, body=None, hs=None, token=None, timeout=35):
         return json.loads(resp.read())
 
 
-def get_room_names(hs, token, room_ids):
-    """Fetch display names for a list of room IDs."""
-    names = {}
-    for rid in room_ids:
-        try:
-            enc = urllib.parse.quote(rid)
-            result = matrix_api("GET", f"/rooms/{enc}/state/m.room.name", hs=hs, token=token)
-            names[rid] = result.get("name", "")
-        except Exception:
-            names[rid] = ""
-    return names
+# Global cache: Matrix user ID → display name (populated from member events across all rooms)
+_user_display_names: dict[str, str] = {}
 
 
-def get_room_member_name(hs, token, room_id, sender, own_puppet_prefix):
-    """For DM rooms with no m.room.name, resolve display name from the sender's member event."""
-    try:
-        enc_room = urllib.parse.quote(room_id)
-        enc_sender = urllib.parse.quote(sender)
-        result = matrix_api(
-            "GET",
-            f"/rooms/{enc_room}/state/m.room.member/{enc_sender}",
-            hs=hs, token=token,
-        )
-        return result.get("displayname", "")
-    except Exception:
+def _clean_display_name(raw: str) -> str:
+    """Strip '(Google Chat)' suffix from bridge display names.
+
+    'BÙI QUỐC KHÁNH - ITC - App Dev - Senior - Mobile Engineer (Google Chat)' →
+    'BÙI QUỐC KHÁNH - ITC - App Dev - Senior - Mobile Engineer'
+    """
+    if not raw:
         return ""
+    if raw.endswith("(Google Chat)"):
+        raw = raw[:-len("(Google Chat)")].rstrip()
+    # Skip useless placeholder names
+    if raw in ("Anonymous User", "Deleted User"):
+        return ""
+    return raw
+
+
+def _short_name(display_name: str) -> str:
+    """Extract just the person's name from the full Google Chat handle.
+
+    'BÙI QUỐC KHÁNH - ITC - App Dev - Senior - Mobile Engineer' → 'BÙI QUỐC KHÁNH'
+    """
+    if " - " in display_name:
+        return display_name.split(" - ")[0].strip()
+    return display_name
+
+
+def _cache_member(user_id: str, displayname: str) -> None:
+    """Cache a user's display name, preferring real names over Anonymous."""
+    clean = _clean_display_name(displayname)
+    if clean and (user_id not in _user_display_names or not _user_display_names[user_id]):
+        _user_display_names[user_id] = clean
+
+
+def _resolve_sender_name(sender: str) -> str:
+    """Look up sender's display name from cache. Returns short name or empty."""
+    dn = _user_display_names.get(sender, "")
+    return _short_name(dn) if dn else ""
 
 
 def parse_message(event, room_id, room_name):
@@ -165,6 +180,9 @@ def parse_message(event, room_id, room_name):
     # Extract display name from sender (bridge format: @googlechat_USERID:localhost)
     sender_local = sender.split(":")[0].replace("@googlechat_", "").replace("@", "")
 
+    # Resolve human-readable sender name from cache
+    sender_display = _resolve_sender_name(sender)
+
     # Check for thread
     relates = content.get("m.relates_to", {})
     thread_id = relates.get("event_id") if relates.get("rel_type") == "m.thread" else None
@@ -175,6 +193,7 @@ def parse_message(event, room_id, room_name):
         "event_id": event.get("event_id", ""),
         "sender": sender,
         "sender_id": sender_local,
+        "sender_display_name": sender_display,
         "body": content.get("body", ""),
         "formatted_body": content.get("formatted_body", ""),
         "msgtype": content.get("msgtype", ""),
@@ -251,24 +270,29 @@ def sync_loop(hs, token, own_puppet_prefix, redis_url=None):
             result = matrix_api("GET", f"/sync?{params}", hs=hs, token=token, timeout=10)
             since = result.get("next_batch", "")
             save_since_token(since)
-            # Cache room names (and member display names for DM rooms)
+            # Build display name cache from ALL member events, and resolve room names
             for rid in result.get("rooms", {}).get("join", {}):
                 state_evts = result["rooms"]["join"][rid].get("state", {}).get("events", [])
-                members = {}
+                real_members = []  # non-bot, non-puppet members
                 for e in state_evts:
                     if e.get("type") == "m.room.name":
                         room_names[rid] = e["content"].get("name", "")
                     elif e.get("type") == "m.room.member":
+                        uid = e.get("state_key", "")
                         dn = e.get("content", {}).get("displayname", "")
                         if dn:
-                            members[e.get("state_key", "")] = dn
-                # For rooms with no name, use other member's display name (DM heuristic)
-                if not room_names.get(rid) and members:
-                    other_names = [dn for uid, dn in members.items()
-                                   if not (own_puppet and uid.startswith(own_puppet))]
-                    if other_names:
-                        room_names[rid] = other_names[0]
-            print(f"[listener] Initial sync done. {len(room_names)} rooms. Token: {since[:30]}...", flush=True)
+                            _cache_member(uid, dn)
+                        # Track real members (not bots, not own puppet, not claude)
+                        if (uid and "bot" not in uid.lower()
+                                and not uid.startswith("@claude:")
+                                and not (own_puppet and uid.startswith(own_puppet))):
+                            clean = _clean_display_name(dn)
+                            if clean:
+                                real_members.append((uid, clean))
+                # For rooms without m.room.name: use other member's name if it's a DM (2 real members)
+                if not room_names.get(rid) and len(real_members) == 1:
+                    room_names[rid] = _short_name(real_members[0][1])
+            print(f"[listener] Initial sync done. {len(room_names)} rooms, {len(_user_display_names)} users cached. Token: {since[:30]}...", flush=True)
         except Exception as e:
             print(f"[listener] Initial sync failed: {e}", flush=True)
             return
@@ -291,10 +315,12 @@ def sync_loop(hs, token, own_puppet_prefix, redis_url=None):
             joined_rooms = result.get("rooms", {}).get("join", {})
 
             for rid, rdata in joined_rooms.items():
-                # Update room name cache from state events
+                # Update caches from state events
                 for e in rdata.get("state", {}).get("events", []):
                     if e.get("type") == "m.room.name":
                         room_names[rid] = e["content"].get("name", "")
+                    elif e.get("type") == "m.room.member":
+                        _cache_member(e.get("state_key", ""), e.get("content", {}).get("displayname", ""))
 
                 # Skip blacklisted rooms entirely
                 if rid in blacklisted:
@@ -326,12 +352,10 @@ def sync_loop(hs, token, own_puppet_prefix, redis_url=None):
                         if not mentioned:
                             continue
 
-                    # Resolve display name for DM rooms with no m.room.name
+                    # Use room name, or sender's short name for unnamed DM rooms
                     effective_rname = rname
-                    if not effective_rname and sender:
-                        effective_rname = get_room_member_name(hs, token, rid, sender, own_puppet)
-                        if effective_rname:
-                            room_names[rid] = effective_rname  # cache for future messages
+                    if not effective_rname:
+                        effective_rname = _resolve_sender_name(sender)
 
                     msg = parse_message(event, rid, effective_rname)
                     new_messages.append(msg)

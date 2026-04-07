@@ -25,37 +25,67 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # @all is always a mention; owner-specific patterns derived from persona.yaml
-_STATIC_MENTION_PATTERNS = [r"@all"]
+_STATIC_MENTION_PATTERNS = [r"@all\b"]
 _owner_mention_patterns: list[str] | None = None
+_owner_puppet_id: str | None = None
+
+
+def _strip_diacritics(text: str) -> str:
+    """Remove Vietnamese diacritics for fuzzy matching.
+
+    'KHÁNH' → 'KHANH', 'BÙI' → 'BUI', 'NGUYỄN' → 'NGUYEN'
+    """
+    import unicodedata
+    nfkd = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in nfkd if not unicodedata.combining(c))
 
 
 def _get_mention_patterns() -> list[str]:
     """Build mention regex patterns from persona.yaml name. Cached after first call.
 
-    Only matches explicit @-mentions and Matrix-to links, NOT bare name words.
-    Bare words like 'khanh' appear too often in Vietnamese text and cause false positives.
+    Only matches explicit @-mentions in Google Chat handle format
+    (e.g., @BÙI QUỐC KHÁNH - ITC - App Dev - Senior - Mobile Engineer).
+    Uses diacritic-stripped matching. Does NOT match bare name words in text.
     """
-    global _owner_mention_patterns
+    global _owner_mention_patterns, _owner_puppet_id
     if _owner_mention_patterns is not None:
         return _owner_mention_patterns
 
+    import os
     import yaml
     from pathlib import Path
     persona_path = Path(__file__).parent.parent.parent / "config" / "persona.yaml"
+    state_path = Path(__file__).parent.parent.parent / ".claude" / "gchat-autopilot.local.md"
     patterns = list(_STATIC_MENTION_PATTERNS)
+
+    # Load owner's Google Chat puppet ID for matrix.to link matching
+    try:
+        for line in state_path.read_text().splitlines():
+            if line.startswith("sender_id:"):
+                uid = line.split(":", 1)[1].strip().strip('"').replace("users/", "")
+                _owner_puppet_id = uid
+                # Match matrix.to links containing the owner's specific puppet ID
+                patterns.append(rf"googlechat_{uid}")
+                break
+    except FileNotFoundError:
+        pass
+
     try:
         persona = yaml.safe_load(persona_path.read_text(encoding="utf-8")) or {}
         name = persona.get("name", "")
         if name:
-            parts = name.lower().split()
-            # Only match @-prefixed mentions (e.g., @khanh, @bui)
-            for part in parts:
-                patterns.append(rf"@{part}\b")
-            # Full name as @-mention (e.g., @khanh bui)
+            # Google Chat mention format: @FULL_NAME - ORG - TEAM - LEVEL - TITLE
+            # Strip diacritics for matching (KHÁNH → KHANH)
+            name_stripped = _strip_diacritics(name).lower()
+            parts = name_stripped.split()
+            # Match @NAME at start of Google Chat handle (diacritic-stripped)
+            # e.g., "@bui quoc khanh" matches "@BÙI QUỐC KHÁNH - ITC - ..."
             if len(parts) > 1:
                 patterns.append(rf"@{' '.join(parts)}")
-            # Matrix-to link format used by Google Chat bridge for @-mentions
-            patterns.append(r"matrix\.to/#/@googlechat_")
+            # Also match just @LASTNAME for short @-mentions
+            for part in parts:
+                if len(part) >= 4:  # skip short parts like "bui" (too common)
+                    patterns.append(rf"@{part}\b")
     except Exception:
         pass  # fail-open: no persona = no owner-specific mention patterns
     _owner_mention_patterns = patterns
@@ -117,6 +147,7 @@ class MatrixChannelAdapter(ChannelAdapter):
             sender_id=sender_id,
             room_id=room_id,
             room_name=room_name,
+            sender_display_name=payload.get("sender_display_name", ""),
             thread_event_id=thread_event_id,
             event_id=event_id,
             is_group=is_group,
@@ -201,7 +232,9 @@ def _detect_group_chat(room_name: str) -> bool:
 def _detect_mention(body: str, formatted_body: str = "") -> bool:
     """Check if a message @mentions the owner via explicit @-prefix or matrix.to link.
 
+    Uses diacritic-stripped matching so @KHÁNH matches pattern 'khanh'.
     Only matches explicit @-mentions, NOT bare name words in text.
     """
-    text = (body + " " + formatted_body).lower()
+    # Strip diacritics for matching Vietnamese names (KHÁNH → KHANH)
+    text = _strip_diacritics(body + " " + formatted_body).lower()
     return any(re.search(p, text) for p in _get_mention_patterns())

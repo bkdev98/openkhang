@@ -139,14 +139,15 @@ class PromptBuilder:
         sender_id = event.get("sender_id", "unknown")
         room_name = event.get("room_name", "")
 
-        # Use readable name: prefer room_name sender context over raw numeric ID
-        sender_display = sender_id
-        # Strip googlechat_ prefix and numeric IDs for readability
-        if sender_display.startswith("@googlechat_"):
-            sender_display = sender_display.split(":")[0].replace("@googlechat_", "")
-        # If still a raw number, use room_name as fallback (for DMs, room_name = person's name)
-        if sender_display.isdigit() and room_name:
-            sender_display = room_name
+        # Prefer sender_display_name (resolved from Matrix member events) over raw IDs
+        sender_display = event.get("sender_display_name", "")
+        if not sender_display:
+            sender_display = sender_id
+            if sender_display.startswith("@googlechat_"):
+                sender_display = sender_display.split(":")[0].replace("@googlechat_", "")
+            # If still a raw number, use room_name as fallback (for DMs, room_name = person's name)
+            if sender_display.isdigit() and room_name:
+                sender_display = room_name
 
         if mode == "outward":
             header = f"[Message from {sender_display}"

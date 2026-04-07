@@ -84,8 +84,8 @@ async def send_draft_notification(data: dict) -> None:
     if not bot or not CHAT_ID:
         return
     room = _friendly_name(data.get("room_name", ""))
-    sender = _friendly_name(data.get("sender", ""))
-    # For DMs: sender bridge ID is numeric → _friendly_name returns "". Use room_name as fallback.
+    # Prefer sender_display_name (resolved from Matrix member events) over raw bridge ID
+    sender = data.get("sender_display_name", "") or _friendly_name(data.get("sender", ""))
     if not sender and room:
         sender = room
     body = data.get("body", "")[:200]
@@ -123,7 +123,7 @@ async def send_auto_reply_notification(data: dict) -> None:
     if not bot or not CHAT_ID:
         return
     room = _friendly_name(data.get("room_name", ""))
-    sender = _friendly_name(data.get("sender", ""))
+    sender = data.get("sender_display_name", "") or _friendly_name(data.get("sender", ""))
     if not sender and room:
         sender = room
     body = data.get("body", "")[:200]

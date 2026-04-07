@@ -34,6 +34,7 @@ class CanonicalMessage:
     sender_id: str
     room_id: str = ""
     room_name: str = ""
+    sender_display_name: str = ""   # resolved human-readable name from member events
     thread_event_id: str = ""
     event_id: str = ""
     is_group: bool = False
@@ -54,6 +55,7 @@ class CanonicalMessage:
             "room_name": self.room_name,
             "sender_id": self.sender_id,
             "sender": self.sender_id,
+            "sender_display_name": self.sender_display_name,
             "thread_event_id": self.thread_event_id,
             "event_id": self.event_id,
         }
