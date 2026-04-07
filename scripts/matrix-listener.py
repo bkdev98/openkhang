@@ -128,8 +128,27 @@ def matrix_api(method, path, body=None, hs=None, token=None, timeout=35):
         return json.loads(resp.read())
 
 
-# Global cache: Matrix user ID → display name (populated from member events across all rooms)
+# Global cache: Matrix user ID → display name (populated from gchat-users.json + member events)
 _user_display_names: dict[str, str] = {}
+# Static lookup: Google Chat numeric ID → display name (loaded from config/gchat-users.json)
+_gchat_users: dict[str, str] = {}
+
+
+def _load_gchat_users() -> None:
+    """Load the static Google Chat user directory for display name resolution.
+
+    Maps numeric Google Chat user IDs to full display names.
+    This is the primary source — covers all users including those in DMs
+    where Matrix member events show 'Anonymous User'.
+    """
+    global _gchat_users
+    lookup_path = PROJECT_DIR / "config" / "gchat-users.json"
+    try:
+        _gchat_users = json.loads(lookup_path.read_text(encoding="utf-8"))
+        print(f"[listener] Loaded {len(_gchat_users)} users from gchat-users.json", flush=True)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        print(f"[listener] gchat-users.json not found or invalid: {exc}", flush=True)
+        _gchat_users = {}
 
 
 def _clean_display_name(raw: str) -> str:
@@ -166,7 +185,16 @@ def _cache_member(user_id: str, displayname: str) -> None:
 
 
 def _resolve_sender_name(sender: str) -> str:
-    """Look up sender's display name from cache. Returns short name or empty."""
+    """Look up sender's display name. Checks static user directory first, then member cache.
+
+    Returns short name (just the person's name without org/title) or empty string.
+    """
+    # Extract numeric Google Chat ID from Matrix user ID (@googlechat_12345:localhost → 12345)
+    gchat_id = sender.split(":")[0].replace("@googlechat_", "").replace("@", "")
+    # Primary: static user directory (covers all users including DMs with Anonymous)
+    if gchat_id in _gchat_users:
+        return _short_name(_gchat_users[gchat_id])
+    # Fallback: member event cache
     dn = _user_display_names.get(sender, "")
     return _short_name(dn) if dn else ""
 
@@ -254,6 +282,9 @@ def sync_loop(hs, token, own_puppet_prefix, redis_url=None):
     """Main sync loop — long-polls Matrix for new events."""
     since = load_since_token()
     room_names = {}
+
+    # Load static user directory for display name resolution
+    _load_gchat_users()
 
     # Load room filtering config
     blacklisted, mention_only, mention_names = load_filter_config()
