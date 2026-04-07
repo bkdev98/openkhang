@@ -81,3 +81,26 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 CREATE INDEX IF NOT EXISTS idx_audit_workflow ON audit_log(workflow_id);
 CREATE INDEX IF NOT EXISTS idx_audit_created  ON audit_log(created_at);
+
+-- Request traces — full pipeline observability per request
+CREATE TABLE IF NOT EXISTS request_traces (
+    id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    mode         VARCHAR(20),              -- 'outward' | 'inward'
+    channel      VARCHAR(50),              -- 'matrix' | 'dashboard' | 'telegram'
+    intent       VARCHAR(50),              -- classified intent
+    skill_name   VARCHAR(100),             -- skill that handled the request
+    action       VARCHAR(50),              -- 'auto_sent' | 'drafted' | 'inward_response' | 'skipped' | 'error'
+    input_body   TEXT,                     -- original message (truncated)
+    room_id      VARCHAR(255),
+    sender_id    VARCHAR(255),
+    confidence   FLOAT,
+    tokens_used  INTEGER DEFAULT 0,
+    latency_ms   INTEGER DEFAULT 0,
+    error        TEXT DEFAULT '',
+    steps        JSONB NOT NULL DEFAULT '[]',  -- ordered list of trace steps
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_traces_created ON request_traces(created_at);
+CREATE INDEX IF NOT EXISTS idx_traces_mode    ON request_traces(mode);
+CREATE INDEX IF NOT EXISTS idx_traces_action  ON request_traces(action);

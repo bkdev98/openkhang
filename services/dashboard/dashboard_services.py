@@ -347,6 +347,93 @@ class DashboardServices:
             raise
 
     # ------------------------------------------------------------------
+    # Request traces
+    # ------------------------------------------------------------------
+
+    async def get_traces(
+        self,
+        mode: str = "",
+        action: str = "",
+        limit: int = 50,
+        before: str = "",
+    ) -> list[dict[str, Any]]:
+        """List recent request traces with optional filters."""
+        self._require_pool()
+        try:
+            conditions = []
+            params: list[Any] = []
+            idx = 1
+
+            if mode:
+                conditions.append(f"mode = ${idx}")
+                params.append(mode)
+                idx += 1
+            if action:
+                conditions.append(f"action = ${idx}")
+                params.append(action)
+                idx += 1
+            if before:
+                conditions.append(f"created_at < ${idx}")
+                params.append(datetime.fromisoformat(before))
+                idx += 1
+
+            where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+            params.append(limit)
+
+            rows = await self._pool.fetch(  # type: ignore[union-attr]
+                f"""
+                SELECT id, mode, channel, intent, skill_name, action,
+                       input_body, room_id, sender_id, confidence,
+                       tokens_used, latency_ms, error, created_at
+                FROM request_traces
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ${idx}
+                """,
+                *params,
+            )
+            return [self._normalise_trace(dict(r)) for r in rows]
+        except Exception as exc:
+            logger.error("get_traces failed: %s", exc)
+            return []
+
+    async def get_trace_detail(self, trace_id: str) -> dict[str, Any] | None:
+        """Get full trace including steps JSONB."""
+        self._require_pool()
+        try:
+            from uuid import UUID
+            uid = UUID(trace_id)
+            row = await self._pool.fetchrow(  # type: ignore[union-attr]
+                """
+                SELECT id, mode, channel, intent, skill_name, action,
+                       input_body, room_id, sender_id, confidence,
+                       tokens_used, latency_ms, error, steps, created_at
+                FROM request_traces WHERE id = $1
+                """,
+                uid,
+            )
+            if not row:
+                return None
+            d = self._normalise_trace(dict(row))
+            # Parse steps JSONB
+            steps_raw = d.get("steps", "[]")
+            if isinstance(steps_raw, str):
+                d["steps"] = json.loads(steps_raw)
+            return d
+        except Exception as exc:
+            logger.error("get_trace_detail failed: %s", exc)
+            return None
+
+    def _normalise_trace(self, d: dict[str, Any]) -> dict[str, Any]:
+        d["id"] = str(d["id"])
+        d["id_short"] = d["id"][:8]
+        if d.get("created_at"):
+            d["created_at_str"] = d["created_at"].strftime("%Y-%m-%d %H:%M:%S")
+            d["created_at"] = d["created_at"].isoformat()
+        d["confidence_pct"] = int((d.get("confidence") or 0) * 100)
+        return d
+
+    # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 

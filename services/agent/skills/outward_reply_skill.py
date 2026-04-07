@@ -69,6 +69,8 @@ class OutwardReplySkill(BaseSkill):
                 latency_ms=int((time.monotonic() - t0) * 1000),
             )
 
+        trace = context.trace
+
         # RAG + conditional code search
         memories = await self._memory.search(body, agent_id="outward", limit=_RAG_LIMIT)
         body_lower = body.lower()
@@ -81,6 +83,8 @@ class OutwardReplySkill(BaseSkill):
                 meta = cr.get("metadata", {})
                 score = 0.8 if meta.get("doc_type") in ("business-logic", "api-spec") else 0.5
                 memories.append({"memory": cr["payload"].get("text", "")[:500], "score": score, "metadata": meta})
+        if trace:
+            trace.record_rag(memories, label="rag_memories")
 
         sender_id = event.get("sender_id", "")
         sender_context: list[dict] = []
@@ -110,20 +114,45 @@ class OutwardReplySkill(BaseSkill):
             except Exception:
                 pass
 
+        if trace:
+            trace.record_rag(sender_context, label="sender_context")
+            if room_messages:
+                trace.add_step("room_messages", count=len(room_messages))
+
         messages = context.prompt_builder.build(
             mode="outward", intent=intent, memories=memories,
             sender_context=sender_context, event=event,
             style_examples=context.style_examples or None,
             chat_history=None, room_messages=room_messages or None,
         )
+        if trace:
+            trace.record_prompt(messages)
+
         llm_response = await llm.generate(
             messages=messages, temperature=0.3, max_tokens=4096, require_structured=True,
         )
+        if trace:
+            trace.record_llm_call(
+                model=llm_response.model_used, tokens=llm_response.tokens_used,
+                latency_ms=llm_response.latency_ms, temperature=0.3,
+                raw_response=llm_response.raw,
+            )
+
         confidence = context.scorer.score(
             llm_response=llm_response, memories=memories, event=event,
             has_deadline_risk=has_deadline_risk, sender_known=bool(sender_context),
             intent=intent, has_history_in_room=has_history_in_room,
         )
+        if trace:
+            trace.record_confidence(confidence, breakdown={
+                "llm_confidence": llm_response.confidence,
+                "has_deadline_risk": has_deadline_risk,
+                "sender_known": bool(sender_context),
+                "has_history_in_room": has_history_in_room,
+                "is_group": is_group,
+                "is_mentioned": is_mentioned,
+            })
+
         latency_ms = int((time.monotonic() - t0) * 1000)
 
         # Route: auto-send or draft

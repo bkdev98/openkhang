@@ -181,15 +181,16 @@ All ingestors call `MemoryClient.add_memory()` after chunking.
 
 **Purpose:** 4-layer agentic architecture: channels → tools → skills → responses
 
-**Files (45 total, ~6200 LOC):**
+**Files (46 total, ~6500 LOC):**
 
-**Core Orchestration (6 files, ~1200 LOC):**
-- `pipeline.py` (264 LOC) — Main orchestrator; matches skills via registry
+**Core Orchestration (7 files, ~1350 LOC):**
+- `pipeline.py` (264 LOC) — Main orchestrator; matches skills via registry, creates trace per request
 - `classifier.py` (165 LOC) — `MessageClassifier`, 6-class classification
 - `confidence.py` (255 LOC) — `ConfidenceScorer`, base + room/sender/history modifiers
 - `prompt_builder.py` (280 LOC) — `PromptBuilder`, system + RAG context + user
 - `llm_client.py` (300 LOC) — `LLMClient`, multi-provider (Meridian > Claude API)
 - `draft_queue.py` (225 LOC) — `DraftQueue`, pending → approved → sent workflow
+- `trace_collector.py` (130 LOC) — `TraceCollector`, accumulates steps (RAG, prompts, LLM, tools) for observability
 
 **Layer 1: Channel Adapters (6 files, ~569 LOC):**
 - `channel_adapter.py` (115 LOC) — `ChannelAdapter` ABC, `CanonicalMessage` dataclass
@@ -330,9 +331,9 @@ Every action logged to `audit_log` table with: workflow_id, action_type, tier, p
 
 ### 5. Dashboard (`services/dashboard/`)
 
-**Purpose:** Web UI for draft review, service health, twin chat, memory management, settings
+**Purpose:** Web UI for draft review, service health, twin chat, memory management, request traces, settings
 
-**Files (18+ total, ~2500 LOC):**
+**Files (20+ total, ~2800 LOC):**
 - `app.py` (280 LOC) — FastAPI main app, 33 routes, page rendering with HTMX support
 - `api_routes.py` (150 LOC) — API endpoint logic (extracted from app.py)
 - `dashboard_services.py` (355 LOC) — High-level service: drafts, hourly stats, events, memory ops
@@ -343,12 +344,13 @@ Every action logged to `audit_log` table with: workflow_id, action_type, tier, p
 - `health_checker.py` (110 LOC) — Probe postgres, redis, embedding API, matrix-listener
 - `twin_chat.py` (75 LOC) — Conversation persistence, history retrieval
 - `templates/base.html` (180 LOC) — Sidebar layout, main content shell, HTMX routing
-- `templates/pages/` (6 new files, ~800 LOC total):
+- `templates/pages/` (7 new files, ~900 LOC total):
   * `overview.html` — Stats, recent drafts, live activity
   * `activity.html` — Full activity log with source filters, infinite scroll
   * `chat.html` — Conversation UI, message bubbles, markdown
   * `drafts.html` — Tab bar (Pending/Approved/Rejected), search, history
   * `memory.html` — Memory search, type filters, knowledge drop form
+  * `traces.html` — Request traces with mode/action filters, two-panel detail view
   * `settings.html` — Persona, confidence, projects, integrations
 - `templates/partials/` (5+ new files, ~400 LOC total):
   * `sidebar.html` — Nav items with icons, health footer, auto-reply toggle
@@ -359,7 +361,7 @@ Every action logged to `audit_log` table with: workflow_id, action_type, tier, p
   * `memory_card.html` — Memory entry with type badge, source, delete button
 - `templates/static/style.css` (280 LOC) — Warm terminal theme, sidebar styles, animations, responsive
 
-**Key Routes (33 total):**
+**Key Routes (35 total):**
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -372,6 +374,8 @@ Every action logged to `audit_log` table with: workflow_id, action_type, tier, p
 | POST | `/api/drafts/{id}/approve` | Approve draft |
 | POST | `/api/drafts/{id}/reject` | Reject draft |
 | POST | `/api/drafts/{id}/edit` | Edit and re-send |
+| GET | `/api/traces` | List traces (mode/action filters, pagination) |
+| GET | `/api/traces/{trace_id}` | Trace detail with expandable steps |
 | GET | `/api/chat/history` | Conversation history |
 | POST | `/api/chat` | Query agent |
 | POST | `/api/chat/clear` | Clear conversation |
@@ -384,11 +388,12 @@ Every action logged to `audit_log` table with: workflow_id, action_type, tier, p
 | GET | `/health` | Service health |
 
 **New Features:**
-- Sidebar navigation (6 pages)
+- Sidebar navigation (7 pages)
 - Overview: stats with 24h sparklines, recent drafts, live feed
 - Activity: readable event cards with source icons, infinite scroll
 - Chat: conversation UI with markdown, history, typing indicator
 - Drafts: tabs (Pending/Approved/Rejected), search, historical records
+- Traces: observability for pipeline steps (RAG, prompts, LLM, tools) with mode/action filters
 - Memory: search/delete Mem0 entries, knowledge drop form (text/pdf/md)
 - Settings: persona, confidence thresholds, projects, integrations
 - Real-time: SSE for activity + HTMX for page navigation
@@ -464,6 +469,26 @@ CREATE TABLE audit_log (
     approved_by VARCHAR(255),
     created_at TIMESTAMPTZ
 );
+
+-- Request traces (observability)
+CREATE TABLE request_traces (
+    id UUID PRIMARY KEY,
+    mode VARCHAR(50),              -- 'outward'|'inward'|'send'
+    channel VARCHAR(50),           -- 'matrix'|'dashboard'|'telegram'
+    intent VARCHAR(100),           -- Classification: work|question|social|etc
+    skill VARCHAR(100),            -- Matched skill name
+    action VARCHAR(100),           -- Specific action taken
+    input_body TEXT,               -- Input message text (truncated)
+    room_id VARCHAR(255),
+    sender_id VARCHAR(255),
+    confidence FLOAT,              -- 0.0 - 1.0 (outward mode only)
+    tokens INTEGER,                -- LLM tokens used
+    latency FLOAT,                 -- Total request time (seconds)
+    error TEXT,                    -- Error message if failed
+    steps JSONB,                   -- Array of trace steps with timestamps
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX idx_request_traces_created, idx_request_traces_mode, idx_request_traces_action;
 
 -- Mem0-managed tables (auto-created)
 CREATE TABLE mem0_memories (

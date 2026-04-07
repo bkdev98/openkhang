@@ -50,20 +50,32 @@ class SendAsOwnerSkill(BaseSkill):
         t0 = time.monotonic()
         body = event.get("body", "").strip()
         intent = context.classifier.classify_intent(body, "inward")
+        trace = context.trace
 
         # Enrich instruction with DM room context for better LLM composition
         enriched_event = {**event, "body": await self._enrich_with_context(body)}
 
         memories = await self._memory.search(body, agent_id="inward", limit=5)
+        if trace:
+            trace.record_rag(memories, label="rag_memories")
+
         messages = context.prompt_builder.build(
             mode="inward", intent=intent, memories=memories,
             sender_context=[], event=enriched_event,
             style_examples=None, chat_history=context.chat_history, room_messages=None,
         )
+        if trace:
+            trace.record_prompt(messages)
 
         llm_response = await llm.generate(
             messages=messages, temperature=0.5, max_tokens=4096, require_structured=False,
         )
+        if trace:
+            trace.record_llm_call(
+                model=llm_response.model_used, tokens=llm_response.tokens_used,
+                latency_ms=llm_response.latency_ms, temperature=0.5,
+                raw_response=llm_response.raw,
+            )
 
         reply_text = llm_response.text or ""
         action_result: dict | None = None

@@ -24,6 +24,7 @@ class SkillContext:
     prompt_builder: Any  # PromptBuilder instance
     style_examples: list[dict] = field(default_factory=list)
     chat_history: list[dict] | None = None
+    trace: Any = None  # TraceCollector instance (optional)
 
 
 class BaseSkill(ABC):

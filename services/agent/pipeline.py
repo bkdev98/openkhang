@@ -26,6 +26,7 @@ from .llm_client import LLMClient
 from .matrix_sender import MatrixSender
 from .prompt_builder import PromptBuilder
 from .skill_registry import SkillContext, SkillRegistry
+from .trace_collector import TraceCollector, save_trace
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,13 @@ class AgentPipeline:
         import time
         t0 = time.monotonic()
 
+        # Create trace for this request
+        trace = TraceCollector()
+        trace.input_body = event.get("body", "")[:500]
+        trace.room_id = event.get("room_id", "")
+        trace.sender_id = event.get("sender_id", "")
+        trace.channel = event.get("channel", "matrix")
+
         body = event.get("body", "").strip()
         if not body:
             return AgentResult(
@@ -137,18 +145,24 @@ class AgentPipeline:
         try:
             mode = self._classifier.classify_mode(event)
             intent = self._classifier.classify_intent(body, mode)
+            trace.record_classification(mode, intent)
             logger.debug("Event classified: mode=%s intent=%s", mode, intent)
 
             skill = self._skills_registry.match(mode, intent, body)
             if not skill:
                 logger.error("No skill matched mode=%s intent=%s — this should not happen", mode, intent)
+                latency_ms = int((time.monotonic() - t0) * 1000)
+                trace.record_result("error", latency_ms, error=f"No skill matched mode={mode} intent={intent}")
+                self._save_trace(trace)
                 return AgentResult(
                     mode=mode, intent=intent, reply_text="",
                     confidence=0.0, action="error",
                     error=f"No skill matched mode={mode} intent={intent}",
-                    latency_ms=int((time.monotonic() - t0) * 1000),
+                    latency_ms=latency_ms,
                 )
 
+            trace.skill_name = skill.name
+            trace.add_step("skill_matched", skill=skill.name)
             logger.debug("Dispatching to skill: %s", skill.name)
             context = SkillContext(
                 classifier=self._classifier,
@@ -156,20 +170,42 @@ class AgentPipeline:
                 prompt_builder=self._prompt_builder,
                 style_examples=self._style_examples,
                 chat_history=chat_history,
+                trace=trace,
             )
             result = await skill.execute(event, self._tools, self._llm, context)
 
+            # Finalize trace from result
+            trace.record_result(
+                result.action, result.latency_ms, error=result.error or "",
+            )
+            trace.confidence = result.confidence
+            trace.tokens_used = result.tokens_used
+
             await self._log_event(event, result)
+            self._save_trace(trace)
             return result
 
         except Exception as exc:
             logger.exception("Pipeline error processing event: %s", exc)
             latency_ms = int((time.monotonic() - t0) * 1000)
+            trace.record_result("error", latency_ms, error=str(exc))
+            self._save_trace(trace)
             return AgentResult(
                 mode="unknown", intent="unknown", reply_text="",
                 confidence=0.0, action="error", error=str(exc),
                 latency_ms=latency_ms,
             )
+
+    # ------------------------------------------------------------------
+    # Trace persistence
+    # ------------------------------------------------------------------
+
+    def _save_trace(self, trace: TraceCollector) -> None:
+        """Persist request trace (fire-and-forget, non-blocking)."""
+        import asyncio
+        pool = self._drafts._pool if hasattr(self._drafts, '_pool') else None
+        if pool:
+            asyncio.create_task(save_trace(pool, trace))
 
     # ------------------------------------------------------------------
     # Registry initialisation

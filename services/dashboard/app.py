@@ -36,7 +36,7 @@ warnings.filterwarnings("ignore", message=".*Inheritance class AiohttpClientSess
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = TEMPLATES_DIR / "static"
-PAGES = {"overview", "chat", "drafts", "activity", "memory", "settings"}
+PAGES = {"overview", "chat", "drafts", "activity", "memory", "traces", "settings"}
 
 # Shared service instance (initialised in lifespan)
 _svc: DashboardServices | None = None

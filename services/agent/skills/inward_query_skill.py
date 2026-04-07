@@ -58,6 +58,7 @@ class InwardQuerySkill(BaseSkill):
         t0 = time.monotonic()
         body = event.get("body", "").strip()
         intent = context.classifier.classify_intent(body, "inward")
+        trace = context.trace
 
         # Build prompt — LLM will actively search via tools before answering
         # Pre-seed with sender context so LLM knows who's asking
@@ -67,12 +68,16 @@ class InwardQuerySkill(BaseSkill):
             sender_context = (
                 await self._memory.get_related(sender_id, agent_id="inward")
             )[:_SENDER_CONTEXT_LIMIT]
+        if trace:
+            trace.record_rag(sender_context, label="sender_context")
 
         messages = context.prompt_builder.build(
             mode="inward", intent=intent, memories=[],
             sender_context=sender_context, event=event,
             style_examples=None, chat_history=context.chat_history, room_messages=None,
         )
+        if trace:
+            trace.record_prompt(messages)
 
         # Instruct LLM to use tools before answering — prevents generic replies
         messages.append({
@@ -100,6 +105,17 @@ class InwardQuerySkill(BaseSkill):
                 temperature=0.5,
                 max_tokens=4096,
             )
+            if trace:
+                trace.record_llm_call(
+                    model=result.model_used, tokens=result.tokens_used,
+                    latency_ms=int((time.monotonic() - t0) * 1000),
+                    temperature=0.5,
+                )
+                for tc in result.tool_calls:
+                    trace.record_tool_call(
+                        tc.tool_name, tc.tool_input, tc.result, tc.success,
+                    )
+                trace.add_step("tool_loop_summary", iterations=result.iterations, total_tool_calls=len(result.tool_calls))
             return AgentResult(
                 mode="inward",
                 intent=intent,

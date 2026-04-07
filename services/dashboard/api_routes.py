@@ -457,6 +457,251 @@ async def memory_ingest(text: str = Form(""), source_label: str = Form("manual")
 
 
 # ------------------------------------------------------------------
+# Request traces
+# ------------------------------------------------------------------
+
+@router.get("/traces", response_class=HTMLResponse)
+async def list_traces(request: Request, mode: str = "", action: str = "",
+                      limit: int = 50, before: str = ""):
+    """Return rendered trace list for HTMX."""
+    limit = min(max(1, limit), 200)
+    try:
+        traces = await _get_svc().get_traces(mode=mode, action=action, limit=limit, before=before)
+    except Exception as exc:
+        logger.error("list_traces error: %s", exc)
+        traces = []
+    if not traces:
+        return HTMLResponse('<p class="text-ok-ghost text-xs text-center py-8">No traces found</p>')
+    html = ""
+    for t in traces:
+        mode_badge = _trace_mode_badge(t.get("mode", ""))
+        action_badge = _trace_action_badge(t.get("action", ""))
+        intent = _escape(t.get("intent", ""))
+        skill = _escape(t.get("skill_name", ""))
+        latency = t.get("latency_ms", 0)
+        tokens = t.get("tokens_used", 0)
+        conf_pct = t.get("confidence_pct", 0)
+        ts = _escape(t.get("created_at_str", ""))
+        tid = t.get("id", "")
+        body_preview = _escape((t.get("input_body") or "")[:80])
+        error = t.get("error", "")
+        error_html = f'<span class="text-ok-red text-[10px]">{_escape(error[:60])}</span>' if error else ""
+
+        html += (
+            f'<div class="trace-row bg-ok-srf border border-ok-border rounded-lg px-4 py-3 card-hover cursor-pointer"'
+            f' hx-get="/api/traces/{tid}" hx-target="#trace-detail" hx-swap="innerHTML">'
+            f'<div class="flex items-center justify-between gap-2 mb-1">'
+            f'<div class="flex items-center gap-2">'
+            f'{mode_badge}{action_badge}'
+            f'<span class="font-mono text-[11px] text-ok-muted">{intent}</span>'
+            f'<span class="font-mono text-[11px] text-ok-ghost">{skill}</span>'
+            f'</div>'
+            f'<span class="font-mono text-[11px] text-ok-ghost flex-shrink-0">{ts}</span>'
+            f'</div>'
+            f'<p class="text-xs text-ok-text truncate">{body_preview}</p>'
+            f'<div class="flex items-center gap-3 mt-1">'
+            f'<span class="text-[10px] text-ok-muted">{latency}ms</span>'
+            f'<span class="text-[10px] text-ok-muted">{tokens} tok</span>'
+            f'<span class="text-[10px] text-ok-amber">{conf_pct}%</span>'
+            f'{error_html}'
+            f'</div></div>'
+        )
+    return HTMLResponse(html)
+
+
+@router.get("/traces/{trace_id}", response_class=HTMLResponse)
+async def trace_detail(request: Request, trace_id: str):
+    """Return rendered trace detail with expandable steps."""
+    try:
+        t = await _get_svc().get_trace_detail(trace_id)
+    except Exception as exc:
+        logger.error("trace_detail error: %s", exc)
+        return HTMLResponse(f'<p class="text-ok-red text-xs">Error loading trace</p>')
+    if not t:
+        return HTMLResponse('<p class="text-ok-ghost text-xs">Trace not found</p>')
+
+    mode_badge = _trace_mode_badge(t.get("mode", ""))
+    action_badge = _trace_action_badge(t.get("action", ""))
+
+    # Header
+    html = (
+        f'<div class="flex items-center justify-between mb-4">'
+        f'<div class="flex items-center gap-2">'
+        f'<button hx-get="/api/traces" hx-target="#trace-list" hx-swap="innerHTML"'
+        f' onclick="document.getElementById(\'trace-detail\').innerHTML=\'\'"'
+        f' class="text-ok-ghost hover:text-ok-text text-xs">&larr; back</button>'
+        f'{mode_badge}{action_badge}'
+        f'<span class="font-mono text-[11px] text-ok-muted">{_escape(t.get("intent", ""))}</span>'
+        f'</div>'
+        f'<span class="font-mono text-[11px] text-ok-ghost">{_escape(t.get("created_at_str", ""))}</span>'
+        f'</div>'
+    )
+
+    # Summary bar
+    html += (
+        f'<div class="flex items-center gap-4 mb-4 text-xs text-ok-muted">'
+        f'<span>Skill: <b class="text-ok-text">{_escape(t.get("skill_name", ""))}</b></span>'
+        f'<span>Latency: <b class="text-ok-amber">{t.get("latency_ms", 0)}ms</b></span>'
+        f'<span>Tokens: <b class="text-ok-text">{t.get("tokens_used", 0)}</b></span>'
+        f'<span>Confidence: <b class="text-ok-amber">{t.get("confidence_pct", 0)}%</b></span>'
+        f'<span>Channel: <b class="text-ok-text">{_escape(t.get("channel", ""))}</b></span>'
+        f'</div>'
+    )
+
+    # Input
+    html += (
+        f'<div class="mb-3">'
+        f'<span class="text-[10px] text-ok-ghost uppercase tracking-wider">Input</span>'
+        f'<p class="text-xs text-ok-text mt-1 bg-ok-raised rounded p-3 whitespace-pre-wrap">{_escape(t.get("input_body", ""))}</p>'
+        f'</div>'
+    )
+
+    if t.get("error"):
+        html += (
+            f'<div class="mb-3 bg-ok-reddim/20 border border-ok-red/30 rounded p-3">'
+            f'<span class="text-[10px] text-ok-red uppercase">Error</span>'
+            f'<p class="text-xs text-ok-red mt-1">{_escape(t["error"])}</p>'
+            f'</div>'
+        )
+
+    # Steps
+    steps = t.get("steps", [])
+    if steps:
+        html += '<div class="flex flex-col gap-2">'
+        html += '<span class="text-[10px] text-ok-ghost uppercase tracking-wider">Pipeline Steps</span>'
+        for i, step in enumerate(steps):
+            step_name = _escape(step.get("name", ""))
+            step_data = step.get("data", {})
+            icon = _step_icon(step_name)
+            color = _step_color(step_name)
+
+            # Format step data as readable content
+            data_html = _render_step_data(step_name, step_data)
+
+            html += (
+                f'<details class="bg-ok-raised border border-ok-border rounded-lg">'
+                f'<summary class="px-4 py-2.5 cursor-pointer hover:bg-ok-hover flex items-center gap-2">'
+                f'<span class="font-mono text-[11px] font-medium {color}">{i+1}. {icon} {step_name}</span>'
+                f'</summary>'
+                f'<div class="px-4 py-3 border-t border-ok-border">{data_html}</div>'
+                f'</details>'
+            )
+        html += '</div>'
+
+    return HTMLResponse(html)
+
+
+def _trace_mode_badge(mode: str) -> str:
+    colors = {"outward": "bg-ok-cyan/20 text-ok-cyan", "inward": "bg-ok-purple/20 text-ok-purple"}
+    cls = colors.get(mode, "bg-ok-amber/20 text-ok-amber")
+    return f'<span class="text-[10px] px-1.5 py-0.5 rounded font-mono {cls}">{_escape(mode)}</span>'
+
+
+def _trace_action_badge(action: str) -> str:
+    colors = {
+        "auto_sent": "bg-ok-green/20 text-ok-green",
+        "drafted": "bg-ok-amber/20 text-ok-amber",
+        "inward_response": "bg-ok-purple/20 text-ok-purple",
+        "skipped": "bg-ok-ghost/20 text-ok-ghost",
+        "error": "bg-ok-red/20 text-ok-red",
+    }
+    cls = colors.get(action, "bg-ok-ghost/20 text-ok-ghost")
+    return f'<span class="text-[10px] px-1.5 py-0.5 rounded font-mono {cls}">{_escape(action)}</span>'
+
+
+def _step_icon(name: str) -> str:
+    icons = {
+        "classification": "&#x1F3AF;", "rag_memories": "&#x1F50D;", "sender_context": "&#x1F464;",
+        "room_messages": "&#x1F4AC;", "prompt": "&#x1F4DD;", "llm_call": "&#x1F916;",
+        "tool_call": "&#x1F527;", "tool_loop_summary": "&#x1F504;", "confidence": "&#x1F4CA;",
+        "result": "&#x2705;", "skill_matched": "&#x1F3AF;",
+    }
+    return icons.get(name, "&#x25CF;")
+
+
+def _step_color(name: str) -> str:
+    colors = {
+        "classification": "text-ok-cyan", "rag_memories": "text-ok-amber", "sender_context": "text-ok-amber",
+        "prompt": "text-ok-purple", "llm_call": "text-ok-green", "tool_call": "text-ok-cyan",
+        "confidence": "text-ok-amber", "result": "text-ok-green", "error": "text-ok-red",
+    }
+    return colors.get(name, "text-ok-muted")
+
+
+def _render_step_data(name: str, data: dict) -> str:
+    """Render step data as human-readable HTML."""
+    if name == "prompt":
+        messages = data.get("messages", [])
+        html = f'<span class="text-[10px] text-ok-ghost">{data.get("message_count", 0)} messages</span>'
+        for msg in messages:
+            role = _escape(msg.get("role", ""))
+            content = _escape(msg.get("content", ""))
+            role_cls = "text-ok-cyan" if role == "system" else ("text-ok-amber" if role == "user" else "text-ok-green")
+            html += (
+                f'<div class="mt-2">'
+                f'<span class="text-[10px] font-mono font-medium {role_cls} uppercase">{role}</span>'
+                f'<pre class="text-[11px] text-ok-text whitespace-pre-wrap font-mono mt-1 '
+                f'max-h-48 overflow-y-auto bg-ok-void rounded p-2">{content}</pre>'
+                f'</div>'
+            )
+        return html
+
+    if name in ("rag_memories", "sender_context"):
+        results = data.get("results", [])
+        count = data.get("count", len(results))
+        html = f'<span class="text-[10px] text-ok-ghost">{count} results</span>'
+        for r in results:
+            score = r.get("score", 0)
+            mem = _escape(r.get("memory", ""))
+            html += (
+                f'<div class="flex gap-2 mt-1">'
+                f'<span class="text-[10px] text-ok-amber font-mono flex-shrink-0">[{score:.2f}]</span>'
+                f'<span class="text-[11px] text-ok-text">{mem}</span>'
+                f'</div>'
+            )
+        return html
+
+    if name == "llm_call":
+        return (
+            f'<div class="grid grid-cols-2 gap-2 text-[11px]">'
+            f'<span class="text-ok-muted">Model:</span><span class="text-ok-text font-mono">{_escape(str(data.get("model", "")))}</span>'
+            f'<span class="text-ok-muted">Tokens:</span><span class="text-ok-text">{data.get("tokens", 0)}</span>'
+            f'<span class="text-ok-muted">Latency:</span><span class="text-ok-amber">{data.get("latency_ms", 0)}ms</span>'
+            f'<span class="text-ok-muted">Temperature:</span><span class="text-ok-text">{data.get("temperature", 0)}</span>'
+            f'</div>'
+            f'{"<pre class=\"text-[11px] text-ok-text whitespace-pre-wrap font-mono mt-2 max-h-32 overflow-y-auto bg-ok-void rounded p-2\">" + _escape(data.get("response_preview", "")) + "</pre>" if data.get("response_preview") else ""}'
+        )
+
+    if name == "tool_call":
+        return (
+            f'<div class="text-[11px]">'
+            f'<span class="text-ok-muted">Tool:</span> <span class="text-ok-cyan font-mono">{_escape(str(data.get("tool_name", "")))}</span>'
+            f' <span class="{"text-ok-green" if data.get("success") else "text-ok-red"}">{"ok" if data.get("success") else "failed"}</span>'
+            f'<pre class="text-[11px] text-ok-text whitespace-pre-wrap font-mono mt-1 max-h-20 overflow-y-auto bg-ok-void rounded p-2">'
+            f'Input: {_escape(json.dumps(data.get("tool_input", {}), default=str)[:500])}\n'
+            f'Result: {_escape(str(data.get("result", ""))[:500])}</pre>'
+            f'</div>'
+        )
+
+    if name == "confidence":
+        breakdown = data.get("breakdown", {})
+        html = f'<span class="text-ok-amber font-mono text-sm font-semibold">{data.get("score", 0):.3f}</span>'
+        if breakdown:
+            html += '<div class="grid grid-cols-2 gap-1 mt-2 text-[11px]">'
+            for k, v in breakdown.items():
+                html += f'<span class="text-ok-muted">{_escape(k)}:</span><span class="text-ok-text">{_escape(str(v))}</span>'
+            html += '</div>'
+        return html
+
+    # Default: render as JSON
+    return (
+        f'<pre class="text-[11px] text-ok-text whitespace-pre-wrap font-mono '
+        f'max-h-32 overflow-y-auto bg-ok-void rounded p-2">'
+        f'{_escape(json.dumps(data, indent=2, default=str)[:1000])}</pre>'
+    )
+
+
+# ------------------------------------------------------------------
 # Settings
 # ------------------------------------------------------------------
 

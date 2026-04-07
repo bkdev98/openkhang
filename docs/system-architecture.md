@@ -254,13 +254,14 @@ projects:
    - `ResponseRouter` — Registry + dispatcher by channel
 
 **Key Components:**
-- `pipeline.py` — Main orchestrator; dispatch to skills via registry
+- `pipeline.py` — Main orchestrator; dispatch to skills via registry, creates trace per request
 - `classifier.py` — Message classification (work/question/social/humor/greeting/fyi)
 - `confidence.py` — Confidence scoring + modifiers (room, sender, history)
 - `prompt_builder.py` — System + user prompts with RAG context
 - `llm_client.py` — Multi-provider LLM: Meridian (default) > Claude API (fallback)
 - `tool_calling_loop.py` — ReAct loop for Claude tool_use (inward mode only)
 - `draft_queue.py` — Manages pending/approved/edited drafts
+- `trace_collector.py` — Accumulates pipeline steps (RAG, prompts, LLM calls, tool calls) for observability
 
 **Pipeline Stages (Skill-Driven):**
 
@@ -421,6 +422,8 @@ VALUES (uuid, 'create_jira', 2, {...}, {...}, 'khanh', now());
 | POST | `/drafts/{id}/reject` | Reject draft, mark as not sent |
 | POST | `/drafts/{id}/edit` | Edit text, save modified version |
 | GET | `/events` (SSE) | Stream activity feed updates (real-time) |
+| GET | `/traces` | Request traces (mode/action filters) |
+| GET | `/traces/{id}` | Trace detail with expandable steps |
 | POST | `/twin-chat` | Query agent: "Summarize discussion about X" |
 | GET | `/health` | Service health: postgres, redis, embedding API, matrix-listener |
 
