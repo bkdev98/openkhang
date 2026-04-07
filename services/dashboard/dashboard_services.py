@@ -266,7 +266,8 @@ class DashboardServices:
     # ------------------------------------------------------------------
 
     async def search_memories(self, query: str, limit: int = 20) -> list[dict]:
-        """Search Mem0 memories via MemoryClient."""
+        """Search across Mem0 semantic memory AND episodic code/knowledge."""
+        results: list[dict] = []
         try:
             from services.memory.config import MemoryConfig
             from services.memory.client import MemoryClient
@@ -275,13 +276,28 @@ class DashboardServices:
             client = MemoryClient(config)
             await client.connect()
             try:
-                results = await client.search(query, limit=limit)
-                return results if isinstance(results, list) else []
+                # Search Mem0 semantic memories
+                mem0_results = await client.search(query, limit=limit // 2)
+                for r in (mem0_results if isinstance(mem0_results, list) else []):
+                    r["_source_type"] = "semantic"
+                    results.extend([r] if isinstance(r, dict) else [])
+
+                # Search episodic code/knowledge index
+                code_results = await client.search_code(query, limit=limit // 2)
+                for r in code_results:
+                    # Normalize episodic results to match memory card format
+                    results.append({
+                        "id": str(r.get("id", "")),
+                        "text": r.get("payload", {}).get("body", "") if isinstance(r.get("payload"), dict) else str(r.get("payload", "")),
+                        "memory": r.get("payload", {}).get("body", "") if isinstance(r.get("payload"), dict) else "",
+                        "metadata": {"source": r.get("source", "code"), "event_type": r.get("event_type", "")},
+                        "_source_type": "episodic",
+                    })
             finally:
                 await client.close()
         except Exception as exc:
             logger.error("search_memories failed: %s", exc)
-            return []
+        return results[:limit]
 
     async def delete_memory(self, memory_id: str) -> bool:
         """Delete a memory entry from Mem0."""

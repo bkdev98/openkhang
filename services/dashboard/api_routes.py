@@ -372,17 +372,32 @@ async def memory_search(request: Request, q: str = "", type: str = ""):
             return HTMLResponse('<p class="text-ok-ghost text-xs text-center py-8">No memories found</p>')
         html = ""
         for mem in results:
-            text = mem.get("text", mem.get("memory", ""))[:200]
+            text = mem.get("text", mem.get("memory", ""))
+            if not text:
+                text = str(mem.get("payload", ""))
+            text = text[:300]
             source = mem.get("metadata", {}).get("source", "unknown") if isinstance(mem.get("metadata"), dict) else "unknown"
             mem_id = mem.get("id", "")
+            # Source type badge
+            src_type = mem.get("_source_type", "semantic")
+            badge_colors = {"semantic": "bg-ok-cyan/20 text-ok-cyan", "episodic": "bg-ok-purple/20 text-ok-purple"}
+            badge_cls = badge_colors.get(src_type, "bg-ok-amber/20 text-ok-amber")
+            badge = f'<span class="text-[10px] px-1.5 py-0.5 rounded {badge_cls}">{_escape(src_type)}</span>'
+            # Delete button only for semantic (Mem0) entries
+            delete_btn = ""
+            if src_type == "semantic" and mem_id:
+                delete_btn = (
+                    f'<button hx-delete="/api/memory/{mem_id}" hx-target="closest div.bg-ok-srf" hx-swap="outerHTML" '
+                    f'hx-confirm="Delete this memory?" class="text-[10px] text-ok-ghost hover:text-ok-red transition-colors">'
+                    'delete</button>'
+                )
             html += (
                 '<div class="bg-ok-srf border border-ok-border rounded-lg p-4 card-hover flex flex-col gap-2">'
-                f'<p class="text-xs text-ok-text">{_escape(text)}</p>'
-                '<div class="flex items-center justify-between">'
-                f'<span class="text-[10px] text-ok-ghost">source: {_escape(source)}</span>'
-                f'<button hx-delete="/api/memory/{mem_id}" hx-target="closest div.bg-ok-srf" hx-swap="outerHTML" '
-                f'hx-confirm="Delete this memory?" class="text-[10px] text-ok-ghost hover:text-ok-red transition-colors">'
-                'delete</button></div></div>'
+                f'<div class="flex items-center gap-2">{badge}'
+                f'<span class="text-[10px] text-ok-ghost">source: {_escape(source)}</span></div>'
+                f'<p class="text-xs text-ok-text whitespace-pre-wrap">{_escape(text)}</p>'
+                f'<div class="flex justify-end">{delete_btn}</div>'
+                '</div>'
             )
         return HTMLResponse(html)
     except Exception as exc:

@@ -6,14 +6,16 @@
     <!-- Search bar -->
     <div class="relative">
         <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-ok-ghost"></i>
-        <input type="text" id="memory-search" name="q" placeholder="Search memories..."
+        <input type="text" id="memory-search" name="q" placeholder="Search memories & knowledge..."
                hx-get="/api/memory/search"
                hx-trigger="keyup changed delay:300ms"
                hx-target="#memory-results"
                hx-swap="innerHTML"
                hx-include="[name='type']"
+               hx-indicator="#memory-spinner"
                class="w-full bg-ok-srf border border-ok-border rounded-lg pl-10 pr-4 py-2.5 text-sm text-ok-text
                       placeholder-ok-ghost focus:outline-none focus:border-ok-amber font-mono">
+        <span id="memory-spinner" class="htmx-indicator absolute right-3 top-1/2 -translate-y-1/2 text-xs text-ok-amber">searching...</span>
         <input type="hidden" name="type" value="" id="memory-type-input">
     </div>
 
