@@ -13,7 +13,11 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from mem0 import Memory
 
@@ -82,14 +86,21 @@ class MemoryClient:
         """
         self._require_mem0()
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: self._mem0.add(  # type: ignore[union-attr]
-                content,
-                agent_id=agent_id,
-                metadata=metadata,
-            ),
-        )
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: self._mem0.add(  # type: ignore[union-attr]
+                    content,
+                    agent_id=agent_id,
+                    metadata=metadata,
+                ),
+            )
+        except (json.JSONDecodeError, Exception) as exc:
+            # Mem0 internally calls LLM to extract facts; if the LLM returns
+            # empty/non-JSON (e.g. Meridian proxy timeout), Mem0 raises JSONDecodeError.
+            # Log and return empty ID — the memory is lost but the pipeline continues.
+            logger.warning("add_memory failed (LLM extraction error): %s — content: %s", exc, content[:100])
+            return ""
         # Mem0 v1.1 returns {"results": [{"id": ...}]}
         try:
             return result["results"][0]["id"]
