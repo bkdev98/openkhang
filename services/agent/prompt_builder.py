@@ -64,9 +64,9 @@ class PromptBuilder:
         if mode == "outward":
             system = self._build_outward_system(memories, sender_context, style_examples, room_messages)
         else:
-            system = self._build_inward_system(memories, sender_context, tool_registry)
+            system = self.build_inward_system(memories, sender_context, tool_registry)
 
-        user_content = self._build_user_message(event, intent, mode)
+        user_content = self.build_user_message(event, intent, mode)
 
         messages = [{"role": "system", "content": system}]
 
@@ -114,7 +114,7 @@ class PromptBuilder:
 
         return "\n\n".join(parts)
 
-    def _build_inward_system(
+    def build_inward_system(
         self,
         memories: list[dict],
         sender_context: list[dict],
@@ -153,7 +153,7 @@ class PromptBuilder:
     # User message builder
     # ------------------------------------------------------------------
 
-    def _build_user_message(self, event: dict, intent: str, mode: str) -> str:
+    def build_user_message(self, event: dict, intent: str, mode: str) -> str:
         body = event.get("body", "").strip()
         sender_id = event.get("sender_id", "unknown")
         room_name = event.get("room_name", "")

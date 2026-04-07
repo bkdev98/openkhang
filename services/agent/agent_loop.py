@@ -1,11 +1,10 @@
-"""Unified agent loop — single execution path for both outward and inward modes.
+"""Agent loop — execution path for outward mode (single LLM call).
 
-Mode differences (prompt, temperature, tool access, iterations, timeout) are
-config-driven via ModeConfig presets, not separate code paths.
+Inward mode tool-calling is handled by SDKAgentRunner (sdk_agent_runner.py).
+This module provides ModeConfig presets and the single-call path for outward.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -14,12 +13,22 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class ToolCallRecord:
+    """Record of a single tool call made during the agent loop."""
+
+    tool_name: str
+    tool_input: dict
+    result: Any
+    success: bool
+
+
+@dataclass
 class ModeConfig:
     """Configuration preset for an agent execution mode."""
     system_prompt_file: str       # "outward_system.md" | "inward_system.md"
     temperature: float
     max_tokens: int
-    use_tools: bool               # False = single LLM call, True = ReAct loop
+    use_tools: bool               # False = single LLM call, True = SDK agent
     tool_blacklist: set[str] = field(default_factory=set)
     require_structured: bool = False
     max_iterations: int = 1
@@ -67,7 +76,10 @@ class AgentLoopResult:
 
 
 class AgentLoop:
-    """Unified execution loop for both outward and inward modes."""
+    """Execution loop for outward mode (single LLM call).
+
+    Inward mode tool-calling is now handled by SDKAgentRunner.
+    """
 
     async def run(
         self,
@@ -79,15 +91,17 @@ class AgentLoop:
         """Execute agent loop with mode-specific config.
 
         Args:
-            config: ModeConfig preset (outward or inward)
+            config: ModeConfig preset (outward only)
             messages: System + user messages from prompt builder
             llm_client: LLMClient instance
-            tools: ToolRegistry instance (only used when config.use_tools=True)
+            tools: Unused — kept for interface compat with OutwardReplySkill
         """
-        if config.use_tools and tools:
-            return await self._run_tool_loop(config, messages, llm_client, tools)
-        else:
-            return await self._run_single(config, messages, llm_client)
+        if config.use_tools:
+            raise NotImplementedError(
+                "Tool-calling is now handled by SDKAgentRunner. "
+                "Use sdk_agent_runner.py for inward mode."
+            )
+        return await self._run_single(config, messages, llm_client)
 
     async def _run_single(self, config: ModeConfig, messages: list[dict], llm: Any) -> AgentLoopResult:
         """Single LLM call — used for outward mode (deterministic, structured output)."""
@@ -107,42 +121,3 @@ class AgentLoop:
             raw=response.raw,
             iterations=1,
         )
-
-    async def _run_tool_loop(self, config: ModeConfig, messages: list[dict], llm: Any, tools: Any) -> AgentLoopResult:
-        """ReAct tool-calling loop — used for inward mode (autonomous reasoning)."""
-        from .tool_calling_loop import run_tool_calling_loop
-
-        # Filter tools based on blacklist
-        tool_defs = [
-            t for t in tools.list_descriptions()
-            if t["name"] not in config.tool_blacklist
-        ]
-
-        try:
-            # Inner timeout slightly lower so it fires before outer, producing clean exit
-            inner_timeout = max(config.timeout_seconds - 10, 30)
-            result = await asyncio.wait_for(
-                run_tool_calling_loop(
-                    llm_client=llm,
-                    messages=messages,
-                    tools=tool_defs,
-                    tool_executor=tools.execute,
-                    max_iterations=config.max_iterations,
-                    temperature=config.temperature,
-                    max_tokens=config.max_tokens,
-                ),
-                timeout=inner_timeout,
-            )
-            return AgentLoopResult(
-                text=result.text,
-                tokens_used=result.tokens_used,
-                model_used=result.model_used,
-                tool_calls=result.tool_calls,
-                iterations=result.iterations,
-            )
-        except asyncio.TimeoutError:
-            logger.warning("Agent loop timed out after %ds", config.timeout_seconds)
-            return AgentLoopResult(
-                text="I ran out of time processing this request. Please try a simpler question or rephrase.",
-                iterations=config.max_iterations,
-            )

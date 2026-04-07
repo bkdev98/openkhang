@@ -27,6 +27,8 @@ from .llm_client import LLMClient
 from .matrix_sender import MatrixSender
 from .prompt_builder import PromptBuilder
 from .context_strategy import ContextStrategy, ContextBundle
+from .sdk_tool_adapter import create_mcp_from_registry
+from .sdk_agent_runner import SDKAgentRunner
 from .skill_registry import SkillContext, SkillRegistry
 from .trace_collector import TraceCollector, save_trace
 
@@ -80,6 +82,7 @@ class AgentPipeline:
         self._scorer = ConfidenceScorer()
         self._style_examples = self._load_style_examples()
         self._tools = self._init_tools()
+        self._sdk_runner = self._init_sdk_runner()
         self._skills_registry = self._init_skills()
         self._context_strategy = ContextStrategy(self._memory)
 
@@ -91,6 +94,8 @@ class AgentPipeline:
         llm_client = LLMClient(
             meridian_url=os.environ.get("MERIDIAN_URL", ""),
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            openrouter_api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+            openrouter_model=os.environ.get("OPENROUTER_MODEL", ""),
         )
         draft_queue = DraftQueue(database_url=config.database_url)
         matrix_sender = MatrixSender(
@@ -109,8 +114,16 @@ class AgentPipeline:
         await self._memory.connect()
         await self._drafts.connect()
 
-    async def close(self) -> None:
-        """Flush and close all connections."""
+    async def close(self, *, close_sdk_sessions: bool = False) -> None:
+        """Flush and close all connections.
+
+        Args:
+            close_sdk_sessions: If True, also close SDK agent sessions.
+                Defaults to False because the SDK runner is typically shared
+                across pipeline instances for session continuity.
+        """
+        if close_sdk_sessions:
+            await self._sdk_runner.close_all()
         await self._memory.close()
         await self._drafts.close()
 
@@ -291,6 +304,20 @@ class AgentPipeline:
         registry.register(ShellExecTool())
         return registry
 
+    def _init_sdk_runner(self) -> SDKAgentRunner:
+        """Initialize the SDK agent runner for inward mode."""
+        mcp_server = create_mcp_from_registry(
+            self._tools, blacklist={"send_message"},
+        )
+        system_prompt = self._prompt_builder.build_inward_system(
+            memories=[], sender_context=[], tool_registry=self._tools,
+        )
+        return SDKAgentRunner(
+            mcp_server=mcp_server,
+            system_prompt=system_prompt,
+            memory_client=self._memory,
+        )
+
     def _init_skills(self) -> SkillRegistry:
         """Initialize skill registry. Registration order = priority (first match wins)."""
         from .skills import OutwardReplySkill, InwardQuerySkill, SendAsOwnerSkill
@@ -299,7 +326,7 @@ class AgentPipeline:
         # SendAsOwnerSkill must come before InwardQuerySkill (more specific pattern)
         registry.register(SendAsOwnerSkill(self._memory))
         registry.register(OutwardReplySkill(self._memory, self._drafts, self._sender))
-        registry.register(InwardQuerySkill(self._memory))
+        registry.register(InwardQuerySkill(self._memory, sdk_runner=self._sdk_runner))
         return registry
 
     # ------------------------------------------------------------------

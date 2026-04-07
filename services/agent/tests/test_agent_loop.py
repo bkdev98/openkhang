@@ -1,17 +1,17 @@
-"""Unit tests for unified agent loop execution.
+"""Unit tests for agent loop execution.
 
-Tests mode-specific configuration presets, single-call vs tool-calling modes,
-timeouts, and config-driven parameter application.
+Tests mode-specific configuration presets, single-call mode (outward),
+and the NotImplementedError guard for tool-calling (now handled by SDK).
 """
 
-import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from ..agent_loop import (
     AgentLoop,
     AgentLoopResult,
     ModeConfig,
+    ToolCallRecord,
 )
 from ..llm_client import LLMResponse
 
@@ -79,7 +79,7 @@ class TestModeConfigPresets:
         assert config.use_tools is True
         assert config.require_structured is False
 
-    def test_inward_config_tool_calling_loop(self):
+    def test_inward_config_iterations(self):
         """Inward mode should support multiple iterations."""
         config = ModeConfig.inward()
         assert config.max_iterations == 10
@@ -176,131 +176,47 @@ class TestSingleLLMCallMode:
         assert result.latency_ms == response.latency_ms
 
 
-class TestToolCallingMode:
-    """Test tool-calling loop execution (inward mode)."""
+class TestToolCallingGuard:
+    """Test that tool-calling mode raises NotImplementedError (now handled by SDK)."""
 
     @pytest.mark.asyncio
-    async def test_tool_mode_calls_tool_loop(self, agent_loop, mock_llm_client, mock_tools):
-        """Tool mode should invoke tool-calling loop."""
+    async def test_tool_mode_raises_not_implemented(self, agent_loop, mock_llm_client, mock_tools):
+        """Tool mode should raise NotImplementedError directing to SDKAgentRunner."""
         config = ModeConfig.inward()
         messages = [{"role": "user", "content": "Test"}]
 
-        # Mock the tool calling loop
-        with patch("services.agent.tool_calling_loop.run_tool_calling_loop") as mock_tool_loop:
-            mock_result = MagicMock()
-            mock_result.text = "Tool result"
-            mock_result.tokens_used = 200
-            mock_result.model_used = "test-model"
-            mock_result.tool_calls = [{"name": "search"}]
-            mock_result.iterations = 3
-            mock_tool_loop.return_value = mock_result
-
-            result = await agent_loop.run(config, messages, mock_llm_client, tools=mock_tools)
-
-        assert result.text == "Tool result"
-        assert result.iterations == 3
-        assert len(result.tool_calls) > 0
-
-    @pytest.mark.asyncio
-    async def test_tool_mode_filters_blacklist(self, agent_loop, mock_llm_client, mock_tools):
-        """Tool mode should filter tools using blacklist."""
-        config = ModeConfig.inward()
-        # Add draft tool to mock
-        mock_tools.list_descriptions.return_value = [
-            {"name": "search", "description": "Search"},
-            {"name": "create_draft", "description": "Draft"},
-            {"name": "send_message", "description": "Send"},
-        ]
-        messages = [{"role": "user", "content": "Test"}]
-
-        with patch("services.agent.tool_calling_loop.run_tool_calling_loop") as mock_tool_loop:
-            mock_result = MagicMock()
-            mock_result.text = "Result"
-            mock_result.tokens_used = 100
-            mock_result.model_used = "test"
-            mock_result.tool_calls = []
-            mock_result.iterations = 1
-            mock_tool_loop.return_value = mock_result
-
+        with pytest.raises(NotImplementedError, match="SDKAgentRunner"):
             await agent_loop.run(config, messages, mock_llm_client, tools=mock_tools)
 
-        # Check the tool list passed to tool loop
-        call_kwargs = mock_tool_loop.call_args.kwargs
-        tool_defs = call_kwargs["tools"]
-        tool_names = [t["name"] for t in tool_defs]
-
-        # send_message is blacklisted; create_draft is now allowed in inward mode
-        assert "search" in tool_names
-        assert "create_draft" in tool_names
-        assert "send_message" not in tool_names
-
     @pytest.mark.asyncio
-    async def test_tool_mode_passes_config(self, agent_loop, mock_llm_client, mock_tools):
-        """Config parameters should be passed to tool loop."""
+    async def test_tool_mode_without_tools_falls_through(self, agent_loop, mock_llm_client):
+        """Tool mode without tools param should fall through to single call."""
+        mock_llm_client.generate.return_value = make_llm_response()
+
         config = ModeConfig.inward()
         messages = [{"role": "user", "content": "Test"}]
 
-        with patch("services.agent.tool_calling_loop.run_tool_calling_loop") as mock_tool_loop:
-            mock_result = MagicMock()
-            mock_result.text = "Result"
-            mock_result.tokens_used = 100
-            mock_result.model_used = "test"
-            mock_result.tool_calls = []
-            mock_result.iterations = 1
-            mock_tool_loop.return_value = mock_result
-
-            await agent_loop.run(config, messages, mock_llm_client, tools=mock_tools)
-
-        call_kwargs = mock_tool_loop.call_args.kwargs
-        assert call_kwargs["max_iterations"] == config.max_iterations
-        assert call_kwargs["temperature"] == config.temperature
-        assert call_kwargs["max_tokens"] == config.max_tokens
+        # tools=None means use_tools is True but no tools provided → single call
+        result = await agent_loop.run(config, messages, mock_llm_client, tools=None)
+        assert result is not None
+        assert isinstance(result, AgentLoopResult)
 
 
-class TestTimeoutHandling:
-    """Test timeout behavior in agent loop."""
+class TestToolCallRecord:
+    """Test ToolCallRecord dataclass."""
 
-    @pytest.mark.asyncio
-    async def test_tool_mode_timeout_returns_graceful_message(
-        self, agent_loop, mock_llm_client, mock_tools
-    ):
-        """Tool mode timeout should return graceful timeout message."""
-        config = ModeConfig.inward()
-        config.timeout_seconds = 120
-        messages = [{"role": "user", "content": "Test"}]
-
-        with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError()):
-            result = await agent_loop.run(config, messages, mock_llm_client, tools=mock_tools)
-
-        # Should have timeout message
-        assert "out of time" in result.text.lower()
-        assert result.iterations == config.max_iterations
-
-    @pytest.mark.asyncio
-    async def test_timeout_uses_config_timeout_value(
-        self, agent_loop, mock_llm_client, mock_tools
-    ):
-        """Timeout should use config.timeout_seconds."""
-        config = ModeConfig.inward()
-        config.timeout_seconds = 50
-        messages = [{"role": "user", "content": "Test"}]
-
-        with patch(
-            "services.agent.tool_calling_loop.run_tool_calling_loop"
-        ) as mock_tool_loop, patch("asyncio.wait_for") as mock_wait_for:
-            mock_result = MagicMock()
-            mock_result.text = "Result"
-            mock_result.tokens_used = 100
-            mock_result.model_used = "test"
-            mock_result.tool_calls = []
-            mock_result.iterations = 1
-            mock_wait_for.return_value = mock_result
-
-            await agent_loop.run(config, messages, mock_llm_client, tools=mock_tools)
-
-        # Inner timeout = max(config.timeout_seconds - 10, 30) = 40
-        call_kwargs = mock_wait_for.call_args.kwargs
-        assert call_kwargs["timeout"] == 40
+    def test_tool_call_record_fields(self):
+        """ToolCallRecord should have all required fields."""
+        record = ToolCallRecord(
+            tool_name="search",
+            tool_input={"query": "test"},
+            result="found it",
+            success=True,
+        )
+        assert record.tool_name == "search"
+        assert record.tool_input == {"query": "test"}
+        assert record.result == "found it"
+        assert record.success is True
 
 
 class TestAgentLoopResultStructure:
@@ -339,32 +255,3 @@ class TestAgentLoopResultStructure:
         assert result.confidence <= 1.0
         assert isinstance(result.tool_calls, list)
         assert result.iterations > 0
-
-
-class TestNoToolsParameter:
-    """Test behavior when tools parameter is not provided."""
-
-    @pytest.mark.asyncio
-    async def test_single_call_without_tools(self, agent_loop, mock_llm_client):
-        """Single call mode without tools should work fine."""
-        mock_llm_client.generate.return_value = make_llm_response()
-
-        config = ModeConfig.outward()
-        messages = [{"role": "user", "content": "Test"}]
-        result = await agent_loop.run(config, messages, mock_llm_client, tools=None)
-
-        assert result.text is not None
-        assert result.tool_calls == []
-
-    @pytest.mark.asyncio
-    async def test_tool_mode_without_tools_parameter(self, agent_loop, mock_llm_client):
-        """Tool mode without tools parameter should fall back gracefully."""
-        config = ModeConfig.inward()
-        messages = [{"role": "user", "content": "Test"}]
-
-        # Should not crash, should be handled
-        result = await agent_loop.run(config, messages, mock_llm_client, tools=None)
-
-        # Should still return a result
-        assert result is not None
-        assert isinstance(result, AgentLoopResult)

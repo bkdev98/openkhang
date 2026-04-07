@@ -1,10 +1,10 @@
 """Inward query skill — handles inward-mode questions from the owner.
 
-Primary path: tool-calling loop (ReAct) — LLM dynamically decides which
-tools to call (search_knowledge, search_code, etc.) before returning a reply.
+Primary path: Claude Agent SDK — LLM dynamically decides which tools to call
+(search_knowledge, search_code, etc.) via the SDK's built-in agent loop.
 
 Fallback path: direct RAG search → build prompt → LLM (plain text).
-The fallback is triggered when tool-calling raises an unexpected error.
+The fallback is triggered when the SDK runner raises an unexpected error.
 
 Outward mode is NOT touched by this skill.
 """
@@ -24,14 +24,15 @@ _SENDER_CONTEXT_LIMIT = 5
 
 
 class InwardQuerySkill(BaseSkill):
-    """Answer inward-mode questions using LLM tool-calling (ReAct loop).
+    """Answer inward-mode questions using Claude Agent SDK (tool-calling loop).
 
-    The LLM receives all safe inward tools and decides which to call.
-    Falls back to direct RAG + LLM when tool-calling fails.
+    The SDK agent receives all safe inward tools via MCP and decides which to call.
+    Falls back to direct RAG + LLM when the SDK runner fails.
     """
 
-    def __init__(self, memory_client: Any) -> None:
+    def __init__(self, memory_client: Any, sdk_runner: Any = None) -> None:
         self._memory = memory_client
+        self._sdk_runner = sdk_runner
 
     @property
     def name(self) -> str:
@@ -39,7 +40,7 @@ class InwardQuerySkill(BaseSkill):
 
     @property
     def description(self) -> str:
-        return "Answer the owner's questions using tool-calling loop (ReAct) with memory and code search."
+        return "Answer the owner's questions using Claude Agent SDK with memory and code search."
 
     @property
     def match_criteria(self) -> dict:
@@ -47,7 +48,6 @@ class InwardQuerySkill(BaseSkill):
         return {"mode": "inward"}
 
     async def execute(self, event: dict, tools: Any, llm: Any, context: SkillContext) -> Any:
-        from ..agent_loop import AgentLoop, ModeConfig
         from ..pipeline import AgentResult
 
         t0 = time.monotonic()
@@ -55,41 +55,47 @@ class InwardQuerySkill(BaseSkill):
         intent = context.classifier.classify_intent(body, "inward")
         trace = context.trace
 
-        # Build prompt — LLM will actively search via tools before answering
-        # Pre-seed with sender context so LLM knows who's asking (from pre-fetched bundle)
+        # Pre-seed with sender context (from pre-fetched bundle)
         bundle = context.context_bundle
         sender_context: list[dict] = bundle.sender_context if bundle else []
         if trace:
             trace.record_rag(sender_context, label="sender_context")
 
-        messages = context.prompt_builder.build(
-            mode="inward", intent=intent, memories=[],
-            sender_context=sender_context, event=event,
-            style_examples=None, chat_history=context.chat_history, room_messages=None,
-            tool_registry=context.tool_registry,
-        )
-        if trace:
-            trace.record_prompt(messages)
-
         try:
-            loop = AgentLoop()
-            loop_result = await loop.run(
-                config=ModeConfig.inward(),
-                messages=messages,
-                llm_client=llm,
-                tools=tools,
+            if not self._sdk_runner:
+                raise RuntimeError("SDKAgentRunner not configured")
+
+            # Build user message via prompt builder
+            user_message = context.prompt_builder.build_user_message(event, intent, "inward")
+
+            # Extract session_id from event (set by dashboard cookie)
+            session_id = event.get("session_id", "default")
+
+            # Trace callback
+            def on_tool_call(name, inp, result, success):
+                if trace:
+                    trace.record_tool_call(name, inp, result, success)
+
+            loop_result = await self._sdk_runner.query(
+                user_message=user_message,
+                session_id=session_id,
+                event=event,
+                on_tool_call=on_tool_call,
             )
+
             if trace:
                 trace.record_llm_call(
-                    model=loop_result.model_used, tokens=loop_result.tokens_used,
+                    model=loop_result.model_used,
+                    tokens=loop_result.tokens_used,
                     latency_ms=int((time.monotonic() - t0) * 1000),
                     temperature=0.5,
                 )
-                for tc in loop_result.tool_calls:
-                    trace.record_tool_call(
-                        tc.tool_name, tc.tool_input, tc.result, tc.success,
-                    )
-                trace.add_step("tool_loop_summary", iterations=loop_result.iterations, total_tool_calls=len(loop_result.tool_calls))
+                trace.add_step(
+                    "sdk_agent_summary",
+                    iterations=loop_result.iterations,
+                    total_tool_calls=len(loop_result.tool_calls),
+                )
+
             return AgentResult(
                 mode="inward",
                 intent=intent,
@@ -101,7 +107,7 @@ class InwardQuerySkill(BaseSkill):
             )
         except Exception as exc:
             logger.warning(
-                "AgentLoop failed for inward query, falling back to direct RAG: %s", exc
+                "SDK agent failed for inward query, falling back to direct RAG: %s", exc
             )
             return await self._fallback_direct(event, llm, context, intent, t0)
 
@@ -115,8 +121,7 @@ class InwardQuerySkill(BaseSkill):
     ) -> Any:
         """Fallback: RAG search → build prompt → plain LLM call.
 
-        Mirrors the original InwardQuerySkill behaviour before Phase 4.
-        Triggered only when the tool-calling loop raises an unhandled error.
+        Triggered only when the SDK runner raises an unhandled error.
         """
         from ..pipeline import AgentResult
 
